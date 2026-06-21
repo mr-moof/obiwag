@@ -1,0 +1,10 @@
+# Obi Wag Version Information
+# This is the single source of truth for version tracking.
+# The generator injects this into CLAUDE.md and other generated files.
+#
+# Release history (the prose for every version) lives in CHANGELOG.md at the
+# repo root. tools/bump-version.ps1 prepends a stub section there on bump.
+
+version: "0.69.58"
+edition: ""
+last_updated: "2026-06-21"

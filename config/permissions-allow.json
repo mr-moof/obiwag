@@ -1,0 +1,17 @@
+{
+  "_managed_by": "obi-deploy",
+  "_description": "Shared permission patterns merged into project settings.local.json by deploy.ps1. Additive only -- deploy never removes local entries.",
+  "permissions": {
+    "allow": [
+      "Bash(start:*)",
+      "Bash(where.exe:*)",
+      "Bash(claude:*)",
+      "Bash(python:*)",
+      "Bash(uv:*)",
+      "Bash(tasklist:*)",
+      "Bash(setx:*)",
+      "WebSearch",
+      "Skill(learning)"
+    ]
+  }
+}

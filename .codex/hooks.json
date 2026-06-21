@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd session_start\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "shell_command|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd pre_tool_use\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "shell_command|apply_patch|read_mcp_resource",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd post_tool_use\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd stop\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

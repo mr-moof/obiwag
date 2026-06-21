@@ -1,0 +1,187 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the Obi Wag phase routing contract (OPT-10). Edit this file, then run tools/render-phase-table.ps1 to regenerate the human table in phases/README.md. Do not hand-edit the table between the <!-- obi:phase-table-start --> / <!-- obi:phase-table-end --> markers. 'display' fields are presentation-only (table rendering); the routing fields (delegated, default_strategy, recipe, inline_fallback_eligible, primary_signal, special_signals, transitions) are the behavioral contract consumed by orchestration/obi-auto.md. The top-level 'lanes' object (OPT-18) declares each lane's TOTAL ordered phase list; the orchestrator classifies a lane after Author and walks that list.",
+  "schema_version": 6,
+  "lanes": {
+    "trivial": {
+      "phases": [2, 9],
+      "signal": "TRIVIAL LANE: {N} lines of comments/whitespace - Author -> Release Gate only",
+      "description": "Comments/whitespace/typos, <=5 lines, no functional code"
+    },
+    "express": {
+      "phases": [1, 2, 3, 4, 5, 7, 9, 10],
+      "signal": "EXPRESS LANE: {N} lines changed",
+      "description": "Under 25 lines of functional code; omits Re-review (6) and README Review (8)"
+    },
+    "standard": {
+      "phases": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "signal": null,
+      "description": "Default full pipeline"
+    },
+    "max": {
+      "phases": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "signal": null,
+      "description": "High-rigor (rigor=max): Phase 0 prereq lock-in + Gates 2-5",
+      "gates": [2, 3, 4, 5]
+    }
+  },
+  "phases": [
+    {
+      "n": 1,
+      "name": "Discovery",
+      "agent": "obi-discovery",
+      "delegated": true,
+      "default_strategy": "dispatch",
+      "recipe": null,
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "DISCOVERY COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "NEEDS USER INPUT:", "match_mode": "prefix"},
+        {"value": "HARD STOP:", "match_mode": "prefix"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/discovery", "model": "opus", "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — retry-or-halt", "signal_display": "`DISCOVERY COMPLETE`"}
+    },
+    {
+      "n": 2,
+      "name": "Author",
+      "agent": "obi-author",
+      "delegated": true,
+      "default_strategy": "dispatch",
+      "recipe": null,
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "AUTHOR COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "NEEDS_CONTEXT", "match_mode": "regex", "pattern": "^NEEDS_CONTEXT(:\\s.+)?$"},
+        {"value": "3-STRIKE LIMIT", "match_mode": "regex", "pattern": "^3-STRIKE LIMIT(:\\s.+)?$"},
+        {"value": "AUTHOR BLOCKED:", "match_mode": "regex", "pattern": "^AUTHOR BLOCKED:\\s.+$"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/author", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — retry-or-halt", "signal_display": "`AUTHOR COMPLETE`"}
+    },
+    {
+      "n": 3,
+      "name": "Simplify",
+      "agent": "obi-simplify",
+      "delegated": true,
+      "default_strategy": "inline",
+      "recipe": "S",
+      "inline_fallback_eligible": true,
+      "primary_signal": {"value": "SIMPLIFY COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "SIMPLIFY SKIPPED", "match_mode": "literal"},
+        {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/simplify", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`SIMPLIFY COMPLETE` \\| `SIMPLIFY SKIPPED`"}
+    },
+    {
+      "n": 4,
+      "name": "Review",
+      "agent": "obi-reviewer",
+      "delegated": true,
+      "default_strategy": "inline",
+      "recipe": "RV",
+      "inline_fallback_eligible": true,
+      "primary_signal": {"value": "REVIEW COMPLETE: PASS", "match_mode": "regex", "pattern": "^REVIEW COMPLETE: PASS$"},
+      "special_signals": [
+        {"value": "REVIEW COMPLETE: FAIL", "match_mode": "regex", "pattern": "^REVIEW COMPLETE: FAIL \\d+ issues?$"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/review", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`REVIEW COMPLETE: PASS` \\| `REVIEW COMPLETE: FAIL [N] issues`"}
+    },
+    {
+      "n": 5,
+      "name": "Integrate",
+      "agent": "obi-integrator",
+      "delegated": false,
+      "default_strategy": "inline",
+      "recipe": null,
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "INTEGRATE COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "NEEDS_CONTEXT", "match_mode": "regex", "pattern": "^NEEDS_CONTEXT(:\\s.+)?$"},
+        {"value": "3-STRIKE LIMIT", "match_mode": "regex", "pattern": "^3-STRIKE LIMIT(:\\s.+)?$"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/integrate", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`INTEGRATE COMPLETE`"}
+    },
+    {
+      "n": 6,
+      "name": "Re-review",
+      "agent": "obi-rereviewer",
+      "delegated": true,
+      "default_strategy": "inline",
+      "recipe": "R",
+      "inline_fallback_eligible": true,
+      "primary_signal": {"value": "RE-REVIEW COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
+      ],
+      "verdict_in_body": true,
+      "display": {"command": "/re-review", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`RE-REVIEW COMPLETE` (verdict in body)"}
+    },
+    {
+      "n": 7,
+      "name": "README",
+      "agent": "obi-readme",
+      "delegated": false,
+      "default_strategy": "inline",
+      "recipe": null,
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "README COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "README SKIPPED", "match_mode": "regex", "pattern": "^README SKIPPED: .+$"}
+      ],
+      "transitions": [
+        {"on_signal": "README SKIPPED", "skip": [8], "match_mode": "prefix", "note": "on_signal is prefix-matched against the emitted 'README SKIPPED: [reason]'. Phase 7 self-skip cascades to skip Phase 8 (README Review) even in standard/max lanes where 8 is in the lane list."}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/readme", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`README COMPLETE` \\| `README SKIPPED`"}
+    },
+    {
+      "n": 8,
+      "name": "README Review",
+      "agent": "obi-readme-verifier",
+      "delegated": true,
+      "default_strategy": "inline",
+      "recipe": "M",
+      "inline_fallback_eligible": true,
+      "primary_signal": {"value": "README REVIEW COMPLETE", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
+      ],
+      "verdict_in_body": true,
+      "display": {"command": "/readme-review", "model": "haiku", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`README REVIEW COMPLETE` (verdict in body)"}
+    },
+    {
+      "n": 9,
+      "name": "Release Gate",
+      "agent": "obi-release-gate",
+      "delegated": false,
+      "default_strategy": "inline",
+      "recipe": "G",
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "RELEASE GATE PASSED", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "RELEASE GATE FAILED", "match_mode": "regex", "pattern": "^RELEASE GATE FAILED: .+$"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/release", "model": null, "strategy_note": null, "recipe_note": "codifies inline path", "fallback_note": "already inline", "signal_display": "`RELEASE GATE PASSED` \\| `RELEASE GATE FAILED: [reason]`"}
+    },
+    {
+      "n": 10,
+      "name": "Learning",
+      "agent": "obi-learner",
+      "delegated": true,
+      "default_strategy": "dispatch",
+      "recipe": null,
+      "inline_fallback_eligible": false,
+      "primary_signal": {"value": "LEARNING CAPTURED", "match_mode": "literal"},
+      "special_signals": [
+        {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
+      ],
+      "verdict_in_body": false,
+      "display": {"command": "/learning", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis", "signal_display": "`LEARNING CAPTURED`"}
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+# VS Code settings (local to user)
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Environment files (secrets)
+.env
+.env.*
+
+# Test artifacts
+stderr_test.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Hook runtime state
+hooks/.obi/
+
+# User-specific Claude config
+.claude/
+
+# Runtime state files (keep README.md and .gitkeep)
+.obi/state/*.json
+.obi/state/*.txt
+.obi/state/worker-*   # OPT-23 headless dispatch worker artifacts (.json result, .err, sys .txt, summary)
+
+# Per-run phase artifacts (author/simplify/review/learning/release-gate reports) + integration report
+.obi/reports/
+.obi/integration-report.md
+
+# Session artifacts (generated per-session, not shared knowledge)
+.obi/discovery-report*.md
+.obi/session-*.md
+.obi/reviews/
+.obi/consistency-audit*.md
+.obi/drift-check*
+.obi/_*
+
+# Codex adversarial review outputs (generated per-run, per-session)
+.obi/review/
+.obi/session-quality.jsonl
+# NOTE: .obi/codex-catches.jsonl is intentionally TRACKED (OPT-19 catch log)
+
+# Per-version learning capture and per-run release-gate report (local only)
+.obi/learnings-v*.md
+.obi/release-gate-report.md
+
+# rigor=max runtime artifacts (grep-gate JSON, probe JSONL, etc.)
+.obi/runtime/
+
+# Local full-text search index (generated, large binary segments)
+search_index/
+
+# Generated output files (legacy, no longer produced)
+output/
+
+# Binaries and archives (never commit these)
+*.exe
+*.dll
+*.msi
+*.tgz
+*.tar.gz
+*.zip
+*.7z
+*.rar
+*.nupkg
+
+# Graphify artifacts — see docs/development-standards.md "Graphify Artifacts"
+# for the policy. Commit GRAPH_REPORT.md (small, human-readable);
+# everything else is regeneration-cheap or repo-inflating.
+graphify-out/cache/
+graphify-out/manifest.json
+graphify-out/cost.json
+graphify-out/.graphify_*
+graphify-out/graph.json
+graphify-out/graph.html

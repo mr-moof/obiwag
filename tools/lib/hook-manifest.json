@@ -1,0 +1,31 @@
+{
+  "hooks": [
+    {"file": "hook_wrapper.cmd", "type": "wrapper"},
+    {"file": "session_start.py", "type": "hook", "event": "SessionStart", "test_input": "{}", "expected_key": "hookSpecificOutput"},
+    {"file": "pre_tool_use.py",  "type": "hook", "event": "PreToolUse",  "test_input": "{\"tool_name\": \"test\"}"},
+    {"file": "post_tool_use.py", "type": "hook", "event": "PostToolUse", "test_input": "{\"tool_name\": \"test\"}"},
+    {"file": "stop.py",          "type": "hook", "event": "Stop",        "test_input": "{\"transcript\": \"\"}"},
+    {"file": "subagent_stop.py", "type": "hook", "event": "SubagentStop", "test_input": "{\"agent_id\": \"obi-discovery\", \"last_assistant_message\": \"DISCOVERY COMPLETE\"}"}
+  ],
+  "core_modules": [
+    "__init__.py",
+    "calibration.py",
+    "correction_retriever.py",
+    "drift_detector.py",
+    "git_sync.py",
+    "hook_error_handler.py",
+    "hook_logger.py",
+    "learning_detector.py",
+    "learning_vendor_detector.py",
+    "memory_reader.py",
+    "paths.py",
+    "pattern_matcher.py",
+    "project_memory.py",
+    "quality_signals.py",
+    "session_state.py",
+    "session_summarizer.py",
+    "strike_counter.py",
+    "transcript_analyzer.py",
+    "version.py"
+  ]
+}
