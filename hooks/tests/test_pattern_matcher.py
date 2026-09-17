@@ -1,7 +1,10 @@
 """Unit tests for pattern_matcher module."""
 
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 
 # Add parent directory to path for imports
@@ -9,6 +12,8 @@ HOOKS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
 
 from core.pattern_matcher import (
+    PatternLoadAborted,
+    _load_patterns_from_dir,
     match_task_to_patterns,
     _extract_injection_text,
     _load_pattern_file,
@@ -22,26 +27,26 @@ class TestMatchTaskToPatterns:
         """Should match patterns by keyword."""
         patterns = [
             {
-                'topic': 'cloud',
+                'topic': 'canvasapi',
                 'confidence': 0.8,
-                'match_keywords': ['cloud', 'aws', 'region'],
+                'match_keywords': ['canvasapi', 'canvas', 'renderer'],
                 'sources': [],
-                'injection_text': 'Use cloud SDK',
+                'injection_text': 'Use CanvasAPI SDK',
             }
         ]
-        matches = match_task_to_patterns('Fix the cloud server profile', patterns)
+        matches = match_task_to_patterns('Fix the CanvasAPI drawing profile', patterns)
         assert len(matches) == 1
-        assert matches[0][0]['topic'] == 'cloud'
+        assert matches[0][0]['topic'] == 'canvasapi'
 
     def test_no_match_returns_empty(self):
         """Should return empty list when no keywords match."""
         patterns = [
             {
-                'topic': 'cloud',
+                'topic': 'canvasapi',
                 'confidence': 0.8,
-                'match_keywords': ['cloud', 'aws'],
+                'match_keywords': ['canvasapi', 'canvas'],
                 'sources': [],
-                'injection_text': 'Use cloud SDK',
+                'injection_text': 'Use CanvasAPI SDK',
             }
         ]
         matches = match_task_to_patterns('Update the README documentation', patterns)
@@ -56,15 +61,15 @@ class TestMatchTaskToPatterns:
         """More keyword matches should increase confidence."""
         patterns = [
             {
-                'topic': 'cloud',
+                'topic': 'canvasapi',
                 'confidence': 0.8,
-                'match_keywords': ['cloud', 'aws', 'region', 'server'],
+                'match_keywords': ['canvasapi', 'canvas', 'renderer', 'palette'],
                 'sources': [],
                 'injection_text': 'text',
             }
         ]
-        single_match = match_task_to_patterns('Check the cloud status', patterns)
-        multi_match = match_task_to_patterns('Check cloud AWS server region', patterns)
+        single_match = match_task_to_patterns('Check the canvasapi status', patterns)
+        multi_match = match_task_to_patterns('Check canvasapi canvas palette renderer', patterns)
         assert multi_match[0][1] > single_match[0][1]
 
     def test_patterns_sorted_by_confidence(self):
@@ -137,22 +142,22 @@ class TestLoadPatternFile:
         """Should load a valid pattern file."""
         pattern_file = tmp_path / 'test.md'
         pattern_file.write_text("""---
-topic: cloud
+topic: canvasapi
 confidence: 0.8
 match_keywords:
-  - cloud
-  - aws
+  - canvasapi
+  - canvas
 sources:
   - docs/vendor.md
 ---
 ## Injection Text
 ```
-Use the cloud SDK.
+Use the CanvasAPI SDK.
 ```
 """)
         result = _load_pattern_file(str(pattern_file))
         assert result is not None
-        assert result['topic'] == 'cloud'
+        assert result['topic'] == 'canvasapi'
         assert result['confidence'] == 0.8
 
     def test_returns_none_without_topic(self, tmp_path):
@@ -165,3 +170,15 @@ No topic defined.
 """)
         result = _load_pattern_file(str(pattern_file))
         assert result is None
+
+    def test_expired_deadline_aborts_before_pattern_io(self, tmp_path):
+        with pytest.raises(PatternLoadAborted, match='deadline'):
+            _load_patterns_from_dir(str(tmp_path), time.monotonic() - 1)
+
+    def test_excessive_pattern_inventory_fails_closed(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            'core.pattern_matcher.os.listdir',
+            lambda _path: [f'p{i}.md' for i in range(129)],
+        )
+        with pytest.raises(PatternLoadAborted, match='exceeds'):
+            _load_patterns_from_dir(str(tmp_path))

@@ -22,7 +22,7 @@
 
 .PARAMETER Rigor
     'standard' (default) classifies into trivial/express/standard from the diff.
-    'max' short-circuits to the max lane (no diff classification needed).
+    'max' routes directly to the max lane (no diff classification needed).
 
 .PARAMETER Base
     Git ref to diff the working tree against. Defaults to HEAD~1 (matches the historical
@@ -105,7 +105,7 @@ function Get-LaneResult {
     }
 }
 
-# rigor=max short-circuits to the max lane (Option A: max IS a lane, OPT-18 section 6).
+# rigor=max routes directly to the max lane (Option A: max IS a lane, OPT-18 section 6).
 if ($Rigor -eq 'max') {
     (Get-LaneResult -Lane 'max' -Lines 0 -Files @() -CommentOnly $false `
         -Reason 'rigor=max: max lane assigned at invocation, no diff classification') |
@@ -116,7 +116,25 @@ if ($Rigor -eq 'max') {
 # Code-file extensions that count toward lane size (the historical grep filter + tsx/jsx).
 $codeExt = @('.ps1', '.psm1', '.psd1', '.cs', '.go', '.py', '.ts', '.tsx', '.js', '.jsx')
 
-$numstat = @(& git -C $RepoRoot diff --numstat $Base 2>$null)
+function Invoke-GitLines {
+    # Runs git and returns its stdout lines, discarding stderr WITHOUT letting it become a
+    # terminating error. `2>$null` alone is not enough: this script runs under
+    # $ErrorActionPreference = 'Stop', where a native command writing to stderr surfaces as a
+    # RemoteException and kills the script. Git chatters routinely -- "warning: in the working
+    # copy of 'x', LF will be replaced by CRLF" -- so lane classification threw on any repo
+    # with autocrlf churn, producing NO json at all. Observed 2026-08-04 mid-run.
+    #
+    # Real failures are still fail-loud: stderr is ignored, $LASTEXITCODE is not. Callers must
+    # keep checking it (an unchecked git failure yields empty output -> lines=0 -> a silent,
+    # wrong 'express' classification, which is exactly what the throw below exists to prevent).
+    param([Parameter(Mandatory)][string[]]$GitArgs)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { return @(& git @GitArgs 2>$null) }
+    finally { $ErrorActionPreference = $prev }
+}
+
+$numstat = Invoke-GitLines -GitArgs @('-C', $RepoRoot, 'diff', '--numstat', $Base)
 # Fail loud on git error: an unchecked failure would yield empty output -> lines=0 -> a silent,
 # wrong 'express' classification. The orchestrator must see the error, not a misclassification.
 if ($LASTEXITCODE -ne 0) {
@@ -146,7 +164,7 @@ $nonCodeOnly = ($lines -eq 0 -and $totalChangedFiles -gt 0)
 $commentOnly = $false
 if ($files.Count -gt 0) {
     $commentPrefixes = @('#', '//', '<#', '#>', '*', '/*', '*/', '--', ';')
-    $diff = @(& git -C $RepoRoot diff $Base -- $files 2>$null)
+    $diff = Invoke-GitLines -GitArgs (@('-C', $RepoRoot, 'diff', $Base, '--') + $files)
     $contentLines = $diff | Where-Object {
         ($_.StartsWith('+') -and -not $_.StartsWith('+++')) -or
         ($_.StartsWith('-') -and -not $_.StartsWith('---'))

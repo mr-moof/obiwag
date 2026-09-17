@@ -34,7 +34,7 @@ function Test-AutoMaxConfig {
     # Expected schema (key -> expected PowerShell type name)
     $schema = @{
         'phase0.required'                 = 'Boolean'
-        'phase0.codex_review'             = 'Boolean'
+        'phase0.peer_review'              = 'Boolean'
         'grep_gates.fail_fast'            = 'Boolean'
         'probes.parallel'                 = 'Boolean'
         'pipeline.max_iterations'         = 'Int32'

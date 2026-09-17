@@ -282,8 +282,9 @@ class TestLegitimateCommands:
 
     def test_allows_git_commands(self):
         assert check_bash_anti_patterns("git -C C:/repo status") is None
-        assert check_bash_anti_patterns("git push origin master") is None
+        assert check_bash_anti_patterns("git fetch origin main") is None
         assert check_bash_anti_patterns("git -C C:/repo -c user.email=x@y.com commit -m 'msg'") is None
+        assert check_bash_anti_patterns("git push origin main") is None
 
     def test_allows_pytest(self):
         assert check_bash_anti_patterns("python -m pytest tests/ -v") is None

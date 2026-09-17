@@ -1,6 +1,8 @@
 ---
 description: Research patterns before implementing. Finds similar modules, checks vendor/technology evidence, writes discovery report.
-allowed-tools: Read, Glob, Grep, Bash
+model: fable[1m]
+effort: xhigh
+allowed-tools: Read, Glob, Grep, Bash, Write
 ---
 
 # Discovery Role
@@ -15,10 +17,25 @@ Research before implementing. Find similar working modules, identify patterns, l
 
 ## Process
 
-### 1. Analyze the Task
-- What is being requested?
-- What vendor integrations are involved?
-- What type of module/feature is this?
+### Research Budget
+
+- You run under a supervisor that kills the worker at its deadline (about nine minutes) and
+  reads only what you have written to the checkpoint. Batch related paths and queries, write
+  settled facts to the report as you go, and synthesize from settled evidence rather than opening
+  sources late.
+- If an essential fact is still unavailable, write `MISSING SOURCE: <expected evidence location>`
+  instead of continuing to search. Do not stop for a decision you can make: classify the gap, take
+  the reversible in-scope default and append `reversible_default_selected` via
+  `autonomous_recovery.py`. Only a named terminal boundary (`user_abort`, `hard_stop`) halts the run.
+- After the orchestrator sends the canonical synthesis steer, make **zero additional tool calls**.
+  Return the best evidence-backed artifact immediately and list missing sources.
+
+### 1. Establish what is being built and what it must follow
+
+Determine what is requested, which vendor integrations are involved, and which existing module is
+the best reference for it. Document the reference module's directory structure, naming
+conventions, test patterns and commands, and CI/CD requirements — these are what Author will be
+held to.
 
 ### 2. Check Data Source Catalog
 - Read `docs/data-sources.md`
@@ -26,30 +43,24 @@ Research before implementing. Find similar working modules, identify patterns, l
 - Only propose a new dependency if existing sources genuinely cannot provide the data.
 - Note availability constraints (VPN, auth, environment) that affect implementation.
 
-### 3. Search for Similar Modules
-- Use Glob to find modules with similar names
-- Use Grep to find similar functionality
-- Identify the best reference module to follow
-
-### 4. Document Patterns
-- Directory structure used by reference module
-- File naming conventions
-- Test patterns and commands
-- CI/CD pipeline requirements
-
-### 5. Check Integration Evidence
-For any vendor or technology integrations (a cloud provider, a hypervisor, a ticketing system, Docker, etc.):
+### 3. Check Integration Evidence
+For any vendor or technology integrations (StorageAPI, CanvasAPI, WidgetAPI, Docker, etc.):
 - Find existing wrappers in repo
 - Locate API documentation in `docs/domain-patterns/` or `docs/`
 - Identify proven usage examples
+- Cross-check every documentation claim you intend to rely on (README, CLAUDE.md, wrapper docs,
+  inline comments) against the actual implementation before writing it into the report:
+  documentation drifts from code, and a report that repeats stale docs seeds wrong implementations.
+  Cite the code line, not the prose, as the evidence.
 
-### 6. Write Discovery Report
+### 4. Write Discovery Report
 
 Write findings to `.obi/discovery-report.md`:
 
-### 7. Write Findings Files (For Multi-Issue Tasks)
+### 5. Write Findings Files Only When Ownership Requires Them
 
-When discovery identifies multiple distinct issues, create individual findings files.
+Prefer one discovery report. For a multi-issue task, create individual findings files only when
+the issues require genuinely separate implementation ownership; issue count alone is not enough.
 
 **File Naming:** `.obi/findings-XX-[category].md`
 
@@ -161,13 +172,12 @@ Ready for `/author` to implement.
 
 ## Completion
 
-On entry, emit the progress bar with Discovery active:
-```
-[1/10] ◐ Disc ━ ○ Auth ━ ○ Simp ━ ○ Rev ━ ○ Intg ━ ○ ReRv ━ ○ Read ━ ○ RdRv ━ ○ Rel ━ ○ Lrn
-```
-
 - **Success:** Output `DISCOVERY COMPLETE`
-- **Missing Info:** Output `NEEDS USER INPUT: [what's needed]`
+- **Missing Info:** Classify it first. Recover in scope (reversible default, appended via
+  `autonomous_recovery.py` as `reversible_default_selected` or `phase_blocker_fixable`) and finish
+  the report; append the named terminal boundary (`user_abort`, `hard_stop`) and halt only when no
+  in-scope recovery exists.
+- **Missing Source:** Output `MISSING SOURCE: [expected evidence location]`
 
 ## Policy References
 

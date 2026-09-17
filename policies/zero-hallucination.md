@@ -20,7 +20,7 @@ If you cannot prove it exists in the repo, you cannot use it.
 | Invented endpoint | `POST /api/v2/widgets/sync` | No evidence this endpoint exists |
 | Guessed parameter | `Get-VM -IncludeSnapshots` | Parameter not in documented cmdlet |
 | Assumed behavior | "This returns a list" | No evidence of return type |
-| Fabricated cmdlet | `Invoke-ServiceSync` | Cmdlet doesn't exist |
+| Fabricated cmdlet | `Invoke-VCenterSync` | Cmdlet doesn't exist |
 | Wrong method | Using PUT when API uses PATCH | API contract violation |
 
 ## Evidence Requirements
@@ -49,21 +49,23 @@ Output: `MISSING SOURCE: [vendor/system] [API/endpoint/function]`
 
 1. **STOP** - Do not proceed without evidence
 2. **Document** - What you were trying to use
-3. **Request** - Ask the user for documentation or working example
-4. **Wait** - Do not guess or invent alternatives
+3. **Request** - In manual `/obi`, ask the user for documentation or a working example. In
+   `obi-auto`/`obi-auto-max`, record `MISSING SOURCE:` with the expected evidence location instead
+   of asking, and continue with everything the missing evidence does not block.
+4. **Never guess** - Do not invent alternatives. Absent evidence is reported, not filled in.
 
 ### Example
 
 ```
-MISSING SOURCE: ticketing-system change-request table schema
+MISSING SOURCE: Example API widget schema
 
-I need to create a change request but cannot find evidence of:
-- Required fields for the change-request table
+I need to create a widget but cannot find evidence of:
+- Required widget fields
 - Valid values for state field
-- Approval workflow fields
+- Required relationship fields
 
 Please provide:
-- Link to the vendor's documentation, OR
+- Link to Example API documentation, OR
 - Working example in repo, OR
 - Manual for me to follow
 ```
@@ -76,20 +78,6 @@ Before writing any code that interacts with external systems:
 2. **Check wrappers/references** - Look in `docs/domain-patterns/` and `docs/`
 3. **Find tests** - Locate tests that exercise the integration
 4. **Verify patterns** - Match your usage to documented patterns
-
-## Common Traps
-
-### "I'm confident about this API"
-Your training data may be outdated or wrong. Find repo evidence.
-
-### "The vendor documentation says..."
-Is that documentation in this repo? Can you show it? If not, it's not evidence.
-
-### "This is a standard REST pattern"
-Standards vary. This specific API may not follow standards. Find evidence.
-
-### "I'll test it and see"
-Testing guesses wastes time. Find evidence first, then implement.
 
 ## Integration with Review
 
@@ -112,9 +100,3 @@ Hallucination in code leads to:
 - Silent failures (wrong parameters ignored)
 - Security issues (assumptions about auth/encryption)
 - Technical debt (code that works by accident)
-
-## The Bottom Line
-
-**If you can't show evidence, you can't use it.**
-
-No exceptions. No "just this once." No "I'm pretty sure."

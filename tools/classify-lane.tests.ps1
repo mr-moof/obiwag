@@ -1,13 +1,14 @@
 <#
 .SYNOPSIS
-    Pester 3.4 tests for tools/classify-lane.ps1 (OPT-18 lane classifier).
+    Pester 5 tests for tools/classify-lane.ps1 (OPT-18 lane classifier).
 
 .DESCRIPTION
     Builds throwaway git repos in TEMP with a minimal phase-table.json (lanes only) and known
     diffs, then asserts the recommended lane + that the phase list is read from the table.
 #>
+BeforeAll {
 
-$ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir  = $PSScriptRoot
 $Classifier = Join-Path $ScriptDir 'classify-lane.ps1'
 
 $FixtureTable = @'
@@ -54,29 +55,31 @@ function Add-File {
     try { & git add -A; & git commit -qm "add $Name" } finally { Pop-Location }
 }
 
+}
+
 Describe 'classify-lane.ps1' {
 
-    It 'rigor=max short-circuits to the max lane (phases include 0)' {
+    It 'rigor=max routes directly to the max lane (phases include 0)' {
         $repo = New-GitFixture 'max'
         $out = (& $Classifier -Rigor max -RepoRoot $repo) -join "`n" | ConvertFrom-Json
-        $out.lane | Should Be 'max'
-        ($out.phases -contains 0) | Should Be $true
+        $out.lane | Should -Be 'max'
+        ($out.phases -contains 0) | Should -Be $true
     }
 
     It 'classifies a small comment-only change as trivial' {
         $repo = New-GitFixture 'trivial'
         Commit-Change -Repo $repo -Content "Write-Host 'a'`r`nWrite-Host 'b'`r`n# a new comment line"
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        $out.lane | Should Be 'trivial'
-        $out.appears_comment_only | Should Be $true
+        $out.lane | Should -Be 'trivial'
+        $out.appears_comment_only | Should -Be $true
     }
 
     It 'classifies a small functional change as express with the express phase list' {
         $repo = New-GitFixture 'express'
         Commit-Change -Repo $repo -Content "Write-Host 'a'`r`nWrite-Host 'b'`r`nWrite-Host 'c'`r`nWrite-Host 'd'"
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        $out.lane | Should Be 'express'
-        ($out.phases -join ',') | Should Be '1,2,3,4,5,7,9,10'
+        $out.lane | Should -Be 'express'
+        ($out.phases -join ',') | Should -Be '1,2,3,4,5,7,9,10'
     }
 
     It 'classifies a large change as standard' {
@@ -84,35 +87,35 @@ Describe 'classify-lane.ps1' {
         $big = (1..30 | ForEach-Object { "Write-Host 'line $_'" }) -join "`r`n"
         Commit-Change -Repo $repo -Content $big
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        $out.lane | Should Be 'standard'
-        ($out.lines_changed -ge 25) | Should Be $true
+        $out.lane | Should -Be 'standard'
+        ($out.lines_changed -ge 25) | Should -Be $true
     }
 
     It 'substitutes {N} in the express signal' {
         $repo = New-GitFixture 'signal'
         Commit-Change -Repo $repo -Content "Write-Host 'a'`r`nWrite-Host 'b'`r`nWrite-Host 'c'"
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        $out.signal | Should Match '^EXPRESS LANE: \d+ lines changed$'
+        $out.signal | Should -Match '^EXPRESS LANE: \d+ lines changed$'
     }
 
     It 'throws on git failure (unknown base) instead of silently classifying express' {
         $repo = New-GitFixture 'gitfail'
-        { & $Classifier -RepoRoot $repo -Base 'no-such-ref-xyz' } | Should Throw
+        { & $Classifier -RepoRoot $repo -Base 'no-such-ref-xyz' } | Should -Throw
     }
 
     It 'counts .tsx files as code' {
         $repo = New-GitFixture 'tsx'
         Add-File -Repo $repo -Name 'app.tsx' -Content "const a = 1`r`nconst b = 2`r`nconst c = 3"
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        ($out.lines_changed -ge 3) | Should Be $true
-        $out.lane | Should Be 'express'
+        ($out.lines_changed -ge 3) | Should -Be $true
+        $out.lane | Should -Be 'express'
     }
 
     It 'flags non_code_only for a docs-only change (0 code lines)' {
         $repo = New-GitFixture 'docsonly'
         Add-File -Repo $repo -Name 'NOTES.md' -Content "line one`r`nline two`r`nline three"
         $out = (& $Classifier -RepoRoot $repo -Base HEAD~1) -join "`n" | ConvertFrom-Json
-        $out.lines_changed | Should Be 0
-        $out.non_code_only | Should Be $true
+        $out.lines_changed | Should -Be 0
+        $out.non_code_only | Should -Be $true
     }
 }

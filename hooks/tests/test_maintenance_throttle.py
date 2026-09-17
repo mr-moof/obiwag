@@ -70,18 +70,16 @@ class TestHandleThrottles:
         monkeypatch.setattr(ss, 'get_state_dir', lambda: str(tmp_path))
         monkeypatch.delenv('OBI_FORCE_MAINTENANCE', raising=False)
 
-        # Spy on the three throttled maintenance functions.
+        # Spy on the two remaining non-destructive maintenance functions.
         gc = MagicMock()
         mem = MagicMock()
-        clean = MagicMock()
         monkeypatch.setattr(sstart, '_gc_maintenance', gc)
         monkeypatch.setattr(sstart, '_check_memory_md_size', mem)
-        monkeypatch.setattr(sstart, '_cleanup_local_settings_regrowth', clean)
         # Keep the rest of _handle hermetic + fast.
         monkeypatch.setattr(sstart, '_resolve_project_working_dir', lambda: None)
         import core.drift_detector as dd
         import core.drift_nag as dn
-        monkeypatch.setattr(dd, 'detect_drift', lambda: {'total_drifted': 0})
+        monkeypatch.setattr(dd, 'detect_drift', lambda **_k: {'total_drifted': 0})
         monkeypatch.setattr(dn, 'save_drift_baseline', lambda *_a, **_k: None)
 
         timer = _StubTimer()
@@ -90,7 +88,6 @@ class TestHandleThrottles:
 
         assert gc.call_count == 1, "GC ran more than once within 24h"
         assert mem.call_count == 1
-        assert clean.call_count == 1
         assert os.path.isfile(str(tmp_path / "last-maintenance.json"))
 
     def test_force_env_runs_every_start(self, tmp_path, monkeypatch):
@@ -100,11 +97,10 @@ class TestHandleThrottles:
         gc = MagicMock()
         monkeypatch.setattr(sstart, '_gc_maintenance', gc)
         monkeypatch.setattr(sstart, '_check_memory_md_size', MagicMock())
-        monkeypatch.setattr(sstart, '_cleanup_local_settings_regrowth', MagicMock())
         monkeypatch.setattr(sstart, '_resolve_project_working_dir', lambda: None)
         import core.drift_detector as dd
         import core.drift_nag as dn
-        monkeypatch.setattr(dd, 'detect_drift', lambda: {'total_drifted': 0})
+        monkeypatch.setattr(dd, 'detect_drift', lambda **_k: {'total_drifted': 0})
         monkeypatch.setattr(dn, 'save_drift_baseline', lambda *_a, **_k: None)
 
         timer = _StubTimer()

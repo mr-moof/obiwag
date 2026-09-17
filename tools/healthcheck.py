@@ -9,7 +9,7 @@ deploy.ps1 runs post-deploy). Run guardian separately for structural checks.
 This module focuses on runtime state that only a live execution can verify:
   - Hook execution tests (actually invoking hooks)
   - Drift detection (hash comparison source vs deployed)
-  - Version sync (version.yaml vs CLAUDE.md)
+  - Version source and deployed content sync
   - Content integrity markers
   - Source structure validation
   - Settings precedence warnings
@@ -19,13 +19,10 @@ This module focuses on runtime state that only a live execution can verify:
 Usage:
     python tools/healthcheck.py           # Full health check
     python tools/healthcheck.py --quick   # Fast validation only
+    python tools/healthcheck.py --repo-root C:\\source\\obiwag-agents
     python tools/healthcheck.py --verbose # Detailed output
     python tools/healthcheck.py --strict  # Treat warnings as failures
 
-Note for restricted Windows environments:
-    If you encounter execution policy errors, run this from a tools root
-    on your environment's trusted/allow-listed path. Copy the obiwag-agents
-    folder there or create a directory junction.
 """
 
 import argparse
@@ -34,20 +31,73 @@ import json
 import os
 import shutil
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional, Set
 
 # Shared health check constants (single source of truth for colors, model versions)
-from health_shared import GREEN, RED, YELLOW, CYAN, RESET, BOLD, color
+from health_shared import GREEN, RED, YELLOW, CYAN, BOLD, color
+from hook_timeout_audit import scan_claude_hook_timeouts, summarize_hook_timeouts
+from peer_review.io_utils import read_json_file
+
+
+def _is_source_repo(path: Path) -> bool:
+    """Return whether *path* has the source-only markers this check requires."""
+    return (
+        (path / 'tools' / 'version.yaml').is_file()
+        and (path / 'policies').is_dir()
+        and (path / 'phases').is_dir()
+        and (path / 'platforms' / 'codex' / 'AGENTS.md').is_file()
+    )
+
+
+def resolve_repo_root(script_dir: Path, explicit: Optional[Path] = None) -> Path:
+    """Resolve source independently from the deployed OBI_HOME script path."""
+    if explicit is not None:
+        candidate = explicit.expanduser().resolve()
+        if not _is_source_repo(candidate):
+            raise ValueError(f"--repo-root is not an obiwag-agents source tree: {candidate}")
+        return candidate
+
+    candidates = [script_dir.parent]
+    project_root = os.environ.get('CLAUDE_PROJECT_ROOT')
+    if project_root:
+        candidates.append(Path(project_root))
+    cwd = Path.cwd()
+    candidates.extend([cwd, *cwd.parents])
+
+    seen: Set[Path] = set()
+    for raw in candidates:
+        try:
+            candidate = raw.expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _is_source_repo(candidate):
+            return candidate
+
+    raise ValueError(
+        "Could not locate the obiwag-agents source tree; pass --repo-root or set "
+        "CLAUDE_PROJECT_ROOT"
+    )
 
 
 class HealthCheck:
     """Obi Wag deployment health checker."""
 
-    def __init__(self, verbose: bool = False, strict: bool = False):
+    def __init__(
+        self,
+        verbose: bool = False,
+        strict: bool = False,
+        repo_root: Optional[Path] = None,
+    ):
         self.verbose = verbose
         self.strict = strict
-        self.script_dir = Path(__file__).parent          # tools/
-        self.repo_root = self.script_dir.parent          # obiwag-agents/
+        self.script_dir = Path(__file__).resolve().parent
+        self.repo_root = resolve_repo_root(self.script_dir, repo_root)
+        self.source_tools_dir = self.repo_root / 'tools'
         self.home = Path.home()
         self.checks_passed = 0
         self.checks_failed = 0
@@ -61,11 +111,12 @@ class HealthCheck:
         self.skills_dir = self.repo_root / 'skills'
         self.orchestration_dir = self.repo_root / 'orchestration'
         self.codex_src_dir = self.repo_root / 'platforms' / 'codex'
-        self.version_file = self.script_dir / 'version.yaml'
+        self.version_file = self.source_tools_dir / 'version.yaml'
 
         # Deploy targets
         self.claude_target = self.home / '.claude'
         self.codex_target = self.home / '.codex'
+        self.tools_target = Path(os.environ.get('OBI_HOME', str(self.home / '.obi-tools')))
 
         # Phase → deployed command name (mirrors deploy.ps1)
         self.phase_command_map = {
@@ -130,6 +181,28 @@ class HealthCheck:
             return ""
         return hashlib.md5(path.read_bytes()).hexdigest()[:8]
 
+    def get_sha256(self, path: Path) -> str:
+        if not path.is_file():
+            return ""
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def check_deployed_tool_hash(self, relative: str, label: str) -> bool:
+        """Fail closed when one repo tool is missing or differs under OBI_HOME/tools."""
+        source = self.source_tools_dir / Path(relative)
+        deployed = self.tools_target / 'tools' / Path(relative)
+        if not source.is_file():
+            self.log(f"{label} source missing: {relative}", 'fail')
+            return False
+        if not deployed.is_file():
+            self.log(f"{label} deployment missing: {deployed}", 'fail')
+            return False
+        source_hash = self.get_sha256(source)
+        if source_hash != self.get_sha256(deployed):
+            self.log(f"{label} deployment drift: {relative}", 'fail')
+            return False
+        self.log(f"{label} in sync: {relative} ({source_hash[:12]})", 'pass')
+        return True
+
     # =========================================================================
     # Health Check Sections
     # =========================================================================
@@ -150,7 +223,7 @@ class HealthCheck:
                     'hard-stop-conditions.md', 'express-lane.md', 'vendor-rules.md',
                     'approval-gates.md']
         for policy in policies:
-            if not self.check_file_exists(self.policies_dir / policy, f"Policy"):
+            if not self.check_file_exists(self.policies_dir / policy, "Policy"):
                 all_pass = False
 
         # Phase directories with command.md
@@ -211,7 +284,7 @@ class HealthCheck:
                     all_pass = False
 
             for extra in ['obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
-                         'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'doc.md']:
+                         'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md']:
                 path = claude_commands_dir / extra
                 if path.exists():
                     self.log(f"Deployed: {extra}", 'pass')
@@ -255,6 +328,12 @@ class HealthCheck:
         else:
             self.log(f"Codex skills dir not found: {codex_skills}", 'warn')
 
+        # Workflow safety tools are copied under OBI_HOME/tools as part of the bulk tools deploy.
+        # Presence alone is insufficient: a stale archive helper could apply an obsolete allowlist.
+        for relative in ['archive-run-state.ps1', 'lib/path-safety.ps1']:
+            if not self.check_deployed_tool_hash(relative, 'Workflow safety tool'):
+                all_pass = False
+
         return all_pass
 
     def check_content_integrity(self) -> bool:
@@ -293,7 +372,6 @@ class HealthCheck:
             manifest = json.load(f)
 
         hook_files = [h['file'] for h in manifest['hooks'] if h['type'] == 'hook']
-        core_dir = hooks_dir / 'core'
         core_modules = manifest['core_modules']
 
         # Test imports
@@ -451,6 +529,65 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
 
         return all_pass
 
+    def check_recent_hook_timeouts(self) -> bool:
+        """Surface externally killed hooks recorded in Claude's transcripts.
+
+        The newest deployed settings or hook-code mtime is the lower bound.
+        A hook implementation fix must clear failures from the code it replaced
+        even when settings.json itself did not change.
+        """
+        self.log('Recent Claude Hook Timeouts', 'header')
+        projects_dir = self.claude_target / 'projects'
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(hours=24)
+        settings_path = self.claude_target / 'settings.json'
+        window = 'in the last 24h'
+
+        deployment_markers = [settings_path]
+        hooks_path = self.claude_target / 'hooks'
+        if hooks_path.is_dir():
+            deployment_markers.extend(hooks_path.glob('*.py'))
+            deployment_markers.extend(hooks_path.glob('core/*.py'))
+            deployment_markers.extend(hooks_path.glob('core/detectors/*.py'))
+
+        newest_deployment = None
+        for marker in deployment_markers:
+            try:
+                deployed_at = datetime.fromtimestamp(
+                    marker.stat().st_mtime, tz=timezone.utc
+                )
+                if newest_deployment is None or deployed_at > newest_deployment:
+                    newest_deployment = deployed_at
+            except OSError:
+                pass
+        if newest_deployment is not None and newest_deployment > since:
+            since = newest_deployment
+            window = 'since the current settings or hook code was deployed'
+
+        try:
+            records = scan_claude_hook_timeouts(
+                projects_dir,
+                since=since,
+                now=now,
+            )
+        except Exception as exc:
+            self.log(f'Could not audit Claude hook timeouts: {exc}', 'warn')
+            return False
+
+        if not records:
+            self.log(f'No Claude-reported hook timeouts {window}', 'pass')
+            return True
+
+        summary = summarize_hook_timeouts(records)
+        latest = summary['latest'][0]
+        self.log(
+            f"Claude reported {summary['total']} hook timeout(s) {window}; "
+            f"latest={latest['event']} {latest['duration_ms']}ms/"
+            f"{latest['timeout_ms']}ms command={latest['command']}",
+            'warn',
+        )
+        return False
+
     def check_version(self) -> bool:
         """Check version and compare deployed vs repo."""
         self.log("Version Check", 'header')
@@ -471,38 +608,42 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
         else:
             self.log(f"version.yaml not found at {self.version_file}", 'warn')
 
+        # The deployed ~/.claude/CLAUDE.md is the global session contract, sourced from
+        # platforms/claude-code/CLAUDE.global.md; the repo-root CLAUDE.md is repo context only.
+        source_claude = self.repo_root / 'platforms' / 'claude-code' / 'CLAUDE.global.md'
         deployed_claude = self.claude_target / 'CLAUDE.md'
-        deployed_version = None
         if deployed_claude.exists():
             try:
-                content = deployed_claude.read_text(encoding='utf-8')
-                import re
-                match = re.search(r'\*\*Version:\*\*\s*([0-9.]+)', content)
-                if match:
-                    deployed_version = match.group(1)
-                    self.log(f"Deployed version: {deployed_version}", 'pass')
+                if source_claude.is_file() and (
+                    self.get_sha256(source_claude) == self.get_sha256(deployed_claude)
+                ):
+                    self.log("Deployed CLAUDE.md matches source", 'pass')
                 else:
-                    self.log("Deployed CLAUDE.md has no version header", 'warn')
+                    self.log("Deployed CLAUDE.md differs from source", 'warn')
+                    self.log("Run tools/deploy.ps1 to update", 'info')
+                    all_pass = False
             except Exception as e:
                 self.log(f"Failed to read deployed CLAUDE.md: {e}", 'fail')
                 all_pass = False
-
-        if repo_version and deployed_version:
-            if repo_version == deployed_version:
-                self.log(f"Versions match: {repo_version}", 'pass')
-            else:
-                self.log(f"VERSION MISMATCH: deployed {deployed_version} != repo {repo_version}", 'warn')
-                self.log("Run tools/deploy.ps1 to update", 'info')
+        else:
+            self.log(f"Deployed CLAUDE.md not found: {deployed_claude}", 'fail')
+            all_pass = False
 
         return all_pass
 
     def check_settings_precedence(self) -> bool:
-        """Check for settings conflicts that cause permission prompting."""
+        """Report merged permission scopes without deleting project settings.
+
+        Claude merges array-valued permission rules across scopes; deny rules
+        take precedence. A shorter project allow-list therefore cannot shadow a
+        user allow-list and is never grounds for deleting settings.local.json.
+        """
         self.log("Settings Precedence Check", 'header')
         all_pass = True
         user_settings = self.claude_target / 'settings.json'
         user_permission_count = 0
         project_permission_count = 0
+        user_allow: set[str] = set()
 
         if user_settings.exists():
             try:
@@ -510,6 +651,7 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
                     user_data = json.load(f)
                 permissions = user_data.get('permissions', {}).get('allow', [])
                 user_permission_count = len(permissions)
+                user_allow = {str(item) for item in permissions}
 
                 if user_permission_count >= 100:
                     self.log(f"User settings: {user_permission_count} permissions (comprehensive)", 'pass')
@@ -530,9 +672,23 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
             all_pass = False
 
         project_root = os.environ.get('CLAUDE_PROJECT_ROOT', '')
-        for project_dir in [Path(project_root) if project_root else None,
-                            self.repo_root, Path.cwd()]:
-            if project_dir is None or not project_dir.exists():
+        candidates = [Path(project_root) if project_root else None, self.repo_root, Path.cwd()]
+        project_dirs: list[Path] = []
+        seen_projects: set[str] = set()
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            try:
+                resolved = candidate.resolve()
+            except (OSError, RuntimeError):
+                continue
+            key = os.path.normcase(str(resolved))
+            if key not in seen_projects:
+                seen_projects.add(key)
+                project_dirs.append(resolved)
+
+        for project_dir in project_dirs:
+            if not project_dir.exists():
                 continue
             project_settings = project_dir / '.claude' / 'settings.local.json'
             if project_settings.exists():
@@ -540,14 +696,20 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
                     with open(project_settings, 'r', encoding='utf-8') as f:
                         project_data = json.load(f)
                     perms = project_data.get('permissions', {}).get('allow', [])
-                    project_permission_count = len(perms)
-                    if project_permission_count < user_permission_count and user_permission_count > 0:
-                        self.log(f"PROJECT-LOCAL OVERRIDE: {project_settings}", 'warn')
-                        self.log(f"  Project: {project_permission_count} vs User: {user_permission_count}", 'warn')
-                        self.log("  Project-local settings OVERRIDE user settings!", 'warn')
-                        self.log(f"  Fix: Delete {project_settings}", 'info')
-                    elif project_permission_count > 0:
-                        self.log(f"Project settings at {project_dir.name}: {project_permission_count} permissions", 'pass')
+                    denies = project_data.get('permissions', {}).get('deny', [])
+                    project_permission_count += len(perms)
+                    conflicts = sorted(user_allow.intersection(str(item) for item in denies))
+                    self.log(
+                        f"Project settings at {project_dir.name}: {len(perms)} allow, "
+                        f"{len(denies)} deny (arrays merge across scopes)",
+                        'pass',
+                    )
+                    if conflicts:
+                        self.log(
+                            "Project deny rules intentionally take precedence over matching "
+                            f"user allows: {', '.join(conflicts[:3])}",
+                            'warn',
+                        )
                 except Exception as e:
                     self.log(f"Failed to parse {project_settings}: {e}", 'warn')
 
@@ -556,6 +718,77 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
             self.log("Run: tools/deploy.ps1 -ClaudeOnly to deploy user settings", 'info')
             all_pass = False
 
+        return all_pass
+
+    def check_peer_review_runs(self) -> bool:
+        """Surface stale or terminal-but-unconsumed durable broker obligations."""
+        self.log("Peer Review Run Health", 'header')
+        runs_root = self.repo_root / '.obi' / 'review' / 'runs'
+        if not runs_root.is_dir():
+            self.log("No durable peer-review runs recorded", 'pass')
+            return True
+        all_pass = True
+        active = 0
+        unconsumed = 0
+        now = datetime.now(timezone.utc)
+        try:
+            statuses = sorted(
+                runs_root.glob('*/status.json'),
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )[:100]
+        except OSError as exc:
+            self.log(f"Could not enumerate peer-review runs: {exc}", 'fail')
+            return False
+        for status_path in statuses:
+            try:
+                status = read_json_file(
+                    status_path,
+                    max_bytes=1024 * 1024,
+                    use_lock=True,
+                )
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+                self.log(f"Unreadable peer status {status_path}: {exc}", 'fail')
+                all_pass = False
+                continue
+            if status.get('run_mode') != 'broker':
+                continue
+            state = str(status.get('transport_status') or 'unknown')
+            if status.get('terminal') is True:
+                if status.get('killed') is True and status.get('kill_verified') is not True:
+                    self.log(
+                        "Unverified peer process-tree termination: "
+                        f"{status.get('run_id')} ({state})",
+                        'fail',
+                    )
+                    all_pass = False
+                if state != 'cancelled' and not status.get('result_consumed_at'):
+                    unconsumed += 1
+                    self.log(
+                        f"Unconsumed terminal peer result: {status.get('run_id')} ({state})",
+                        'warn',
+                    )
+                    all_pass = False
+                continue
+            active += 1
+            heartbeat = status.get('heartbeat_at')
+            try:
+                parsed = datetime.fromisoformat(str(heartbeat).replace('Z', '+00:00'))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                age = (now - parsed).total_seconds()
+            except (TypeError, ValueError):
+                age = float('inf')
+            if age > 30:
+                self.log(
+                    f"Stale peer broker heartbeat: {status.get('run_id')} ({age:.1f}s, {state})",
+                    'fail',
+                )
+                all_pass = False
+        if active == 0 and unconsumed == 0:
+            self.log("No outstanding broker obligations", 'pass')
+        elif active:
+            self.log(f"Active broker reviews with current receipts: {active}", 'pass')
         return all_pass
 
     def check_auto_memory(self) -> bool:
@@ -626,38 +859,71 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
 
         return True
 
-    def check_codex_review_profile(self) -> bool:
-        """Verify Codex review profile setup is visible before review runs."""
-        self.log("Codex Review Profile", 'header')
+    def check_peer_review_harness(self) -> bool:
+        """Verify canonical peer-review artifacts, deployment hashes, and cutover."""
+        self.log("Peer Review Harness", 'header')
+        all_pass = True
 
-        codex = shutil.which('codex')
-        if codex:
-            self.log(f"codex on PATH: {codex}", 'pass')
+        for provider in ('codex', 'claude'):
+            executable = shutil.which(provider)
+            if executable:
+                self.log(f"{provider} on PATH: {executable}", 'pass')
+            else:
+                self.log(f"{provider} not found on PATH; that peer direction is unavailable", 'warn')
+
+        required = [
+            'peer-review.ps1',
+            'peer-review.py',
+            'peer_review/__init__.py',
+            'peer_review/adapters.py',
+            'peer_review/broker.py',
+            'peer_review/cli.py',
+            'peer_review/io_utils.py',
+            'peer_review/packet.py',
+            'peer_review/process_control.py',
+            'peer_review/runner.py',
+            'peer_review/validation.py',
+            'schemas/peer-review-request.schema.json',
+            'schemas/peer-review-scope-manifest.schema.json',
+            'schemas/peer-review-result.schema.json',
+            'schemas/peer-review-status.schema.json',
+        ]
+        for relative in required:
+            if not self.check_deployed_tool_hash(relative, 'Peer artifact'):
+                all_pass = False
+
+        deployed_tools = self.tools_target / 'tools'
+
+        policy_source = self.policies_dir / 'peer-review.md'
+        policy_deployed = self.claude_target / 'docs' / 'policies' / 'peer-review.md'
+        if not policy_source.is_file() or not policy_deployed.is_file():
+            self.log("Peer-review policy source/deployment is incomplete", 'fail')
+            all_pass = False
+        elif self.get_sha256(policy_source) != self.get_sha256(policy_deployed):
+            self.log("Peer-review policy deployment drift", 'fail')
+            all_pass = False
         else:
-            self.log("codex not found on PATH; Codex review will be unavailable", 'warn')
+            self.log("Peer-review policy in sync", 'pass')
 
-        config_path = self.codex_target / 'config.toml'
-        if not config_path.is_file():
-            self.log(f"Codex config not found: {config_path}", 'warn')
-            return False
+        stale_skill = self.home / '.agents' / 'skills' / 'codex-adversarial-review'
+        if stale_skill.exists():
+            self.log(f"Retired unmanaged peer skill remains active: {stale_skill}", 'fail')
+            all_pass = False
+        else:
+            self.log("Retired unmanaged peer skill absent", 'pass')
 
-        # Newer codex requires the review profile in its own file
-        # ~/.codex/review.config.toml; legacy codex used [profiles.review] in
-        # config.toml (and newer codex now REJECTS that table). Accept either;
-        # prefer the per-file convention.
-        review_profile = self.codex_target / 'review.config.toml'
-        if review_profile.is_file():
-            self.log("Codex review profile present (review.config.toml)", 'pass')
-            return True
+        for relative in (
+            'codex-run.ps1', 'codex-run.tests.ps1', 'codex-plan-prep.ps1',
+            'codex-plan-prep.tests.ps1', 'schemas/codex-plan-critique.schema.json',
+        ):
+            legacy = deployed_tools / Path(relative)
+            if legacy.exists():
+                self.log(f"Retired peer-review path remains deployed: {legacy}", 'fail')
+                all_pass = False
 
-        content = config_path.read_text(encoding='utf-8', errors='ignore').lower()
-        if '[profiles.review]' in content:
-            self.log("Codex review profile present (legacy [profiles.review]; newer codex wants "
-                     "~/.codex/review.config.toml — see policies/codex-usage.md)", 'pass')
-            return True
-
-        self.log("Codex review profile missing (no review.config.toml or [profiles.review])", 'warn')
-        return False
+        if all_pass:
+            self.log("Canonical peer-review cutover is complete", 'pass')
+        return all_pass
 
     # =========================================================================
     # Main Entry Points
@@ -671,11 +937,13 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
 
         self.check_version()
         self.check_deployment()
-        self.check_codex_review_profile()
+        self.check_peer_review_harness()
+        self.check_peer_review_runs()
         self.check_auto_memory()
         self.check_settings_precedence()
         self.check_content_integrity()
         self.check_hooks_execution()
+        self.check_recent_hook_timeouts()
 
         return self._print_summary()
 
@@ -689,11 +957,13 @@ print(f"autonomous_learning={{cal.get('safety', {{}}).get('autonomous_learning',
         self.check_source_structure()
         self.check_codex_source()
         self.check_deployment()
-        self.check_codex_review_profile()
+        self.check_peer_review_harness()
+        self.check_peer_review_runs()
         self.check_auto_memory()
         self.check_settings_precedence()
         self.check_content_integrity()
         self.check_hooks_execution()
+        self.check_recent_hook_timeouts()
         self.check_drift()
 
         return self._print_summary()
@@ -735,13 +1005,10 @@ def main():
     parser = argparse.ArgumentParser(
         description='Obi Wag Health Check - Validate deployment status',
         epilog='''
-Note for restricted Windows environments:
-  If you encounter execution policy errors, copy obiwag-agents to a
-  trusted/allow-listed tools path and run from there.
-
 Examples:
   python tools/healthcheck.py           # Full health check
   python tools/healthcheck.py --quick   # Fast validation only
+  python tools/healthcheck.py --repo-root C:/src/obiwag-agents
   python tools/healthcheck.py -v        # Verbose output
         ''',
         formatter_class=argparse.RawDescriptionHelpFormatter
@@ -753,9 +1020,18 @@ Examples:
                         help='Verbose output with additional details')
     parser.add_argument('--strict', action='store_true',
                         help='Treat warnings as failures for gating')
+    parser.add_argument('--repo-root', type=Path,
+                        help='Path to the obiwag-agents source tree (auto-detected by default)')
 
     args = parser.parse_args()
-    checker = HealthCheck(verbose=args.verbose, strict=args.strict)
+    try:
+        checker = HealthCheck(
+            verbose=args.verbose,
+            strict=args.strict,
+            repo_root=args.repo_root,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.quick:
         success = checker.run_quick()

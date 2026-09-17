@@ -81,6 +81,18 @@ function Test-PathUnderAnyRoot {
     param([string]$CandidatePath, [string[]]$AllowedRoots)
     try {
         $resolvedCandidate = [System.IO.Path]::GetFullPath($CandidatePath)
+
+        # Do NOT rely on GetFullPath throwing to reject malformed input: that is
+        # .NET Framework behavior only. On .NET (Core) 5+ -- i.e. pwsh 7, which is
+        # what this workstation runs -- GetFullPath does NOT throw on an embedded
+        # drive spec; it returns the string verbatim, so "<root>\C:\evil.exe"
+        # StartsWith("<root>\") is TRUE and this guard would ACCEPT it. Reject an
+        # embedded volume separator explicitly so both hosts agree. (A colon is
+        # legal only as the drive separator at index 1.)
+        if ($resolvedCandidate.IndexOf([System.IO.Path]::VolumeSeparatorChar, 2) -ge 0) {
+            return $false
+        }
+
         foreach ($root in $AllowedRoots) {
             $resolvedRoot = [System.IO.Path]::GetFullPath($root)
             if (-not $resolvedRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
@@ -100,7 +112,7 @@ function Test-PathUnderAnyRoot {
 # Claude manifest:
 #   - root-level keys (no `/`): under $ClaudeTarget (CLAUDE.md, statusline-command.ps1, settings.json)
 #   - commands/agents/skills/docs/hooks/X: under $ClaudeTarget\<category>\X
-#   - tools/X: under $env:OBI_HOME\tools\X (tools carve-out)
+#   - tools/X: under $env:OBI_HOME\tools\X (endpoint security carve-out)
 # Codex manifest:
 #   - absolute path key (starts with drive letter): use verbatim
 #   - skills/X: under $CodexTarget\skills\X
@@ -194,8 +206,8 @@ function Test-IsExactCodexAllowed {
     }
 }
 
-# Sentinel for an external manifest source (e.g. a command file deployed
-# from a sibling repo via an absolute source path). When this is the source-rel,
+# Sentinel for an external manifest source (e.g. user-command.md from
+# example-project, registered via #172). When this is the source-rel,
 # we still own removing the deployed copy, but we don't try to
 # hash-compare against the original source for the settings.json restore.
 function Test-IsAbsoluteSourceRel {
@@ -210,7 +222,7 @@ $ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot    = Split-Path -Parent $ScriptDir
 $ClaudeTarget = Join-Path $env:USERPROFILE '.claude'
 $CodexTarget  = Join-Path $env:USERPROFILE '.codex'
-$ToolsTarget  = if ($env:OBI_HOME) { $env:OBI_HOME } else { 'C:\src\obi-tools' }
+$ToolsTarget  = if ($env:OBI_HOME) { $env:OBI_HOME } else { Join-Path $env:USERPROFILE '.obi-tools' }
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan

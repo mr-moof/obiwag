@@ -44,14 +44,14 @@ class TestLearningDataclass:
         """Test Learning with custom metadata."""
         learning = Learning(
             type=LearningType.TECHNOLOGY,
-            title="Cloud pattern",
+            title="WidgetAPI pattern",
             content="API usage",
-            target_file="domain-patterns/cloud.md",
+            target_file="domain-patterns/widgetapi.md",
             confidence=0.85,
-            metadata={'technology': 'cloud'}
+            metadata={'technology': 'widgetapi'}
         )
         assert learning.confidence == 0.85
-        assert learning.metadata == {'technology': 'cloud'}
+        assert learning.metadata == {'technology': 'widgetapi'}
 
 
 class TestDetectGotchasFromCorrections:
@@ -77,7 +77,7 @@ class TestDetectGotchasFromCorrections:
     def test_git_email_correction(self):
         """Test detecting Git email requirement."""
         corrections = [{
-            'text': "The commit email must be your account email, not your personal one",
+            'text': "The email identity is incorrect; use the configured repository identity",
             'pattern': 'test',
             'confidence': 0.8
         }]

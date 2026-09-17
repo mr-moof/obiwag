@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Pester 3.4 tests for tools/lib/checks/check-auto-max.ps1 (Test-AutoMaxConfig function).
+    Pester 5 tests for tools/lib/checks/check-auto-max.ps1 (Test-AutoMaxConfig function).
 #>
 
 Describe 'Test-AutoMaxConfig' {
@@ -22,15 +22,15 @@ Describe 'Test-AutoMaxConfig' {
 
         # Verify loader is reachable
         $script:LoaderPath = Join-Path $ScriptDir 'load-auto-max-config.ps1'
-        (Test-Path $LoaderPath) | Should Be $true
+        (Test-Path $LoaderPath) | Should -Be $true
     }
 
     Context 'Absent config file' {
 
         It 'reports valid when auto-max.yaml does not exist' {
             $result = Test-AutoMaxConfig
-            $result.Valid | Should Be $true
-            $result.Errors.Count | Should Be 0
+            $result.Valid | Should -Be $true
+            $result.Errors.Count | Should -Be 0
         }
     }
 
@@ -40,7 +40,7 @@ Describe 'Test-AutoMaxConfig' {
             $body = @"
 phase0:
   required: true
-  codex_review: true
+  peer_review: true
 pipeline:
   max_iterations: 3
 auto_memory:
@@ -49,8 +49,8 @@ auto_memory:
 "@
             Set-Content -Path $ConfigPath -Value $body -Encoding UTF8
             $result = Test-AutoMaxConfig
-            $result.Valid | Should Be $true
-            $result.Errors.Count | Should Be 0
+            $result.Valid | Should -Be $true
+            $result.Errors.Count | Should -Be 0
         }
     }
 
@@ -63,9 +63,9 @@ pipeline:
 "@
             Set-Content -Path $ConfigPath -Value $body -Encoding UTF8
             $result = Test-AutoMaxConfig
-            $result.Valid | Should Be $false
-            ($result.Errors -join "`n") -match 'out of range' | Should Be $true
-            ($result.Errors -join "`n") -match 'pipeline.max_iterations' | Should Be $true
+            $result.Valid | Should -Be $false
+            ($result.Errors -join "`n") -match 'out of range' | Should -Be $true
+            ($result.Errors -join "`n") -match 'pipeline.max_iterations' | Should -Be $true
         }
 
         It 'rejects auto_memory.confidence_threshold out of range' {
@@ -75,9 +75,9 @@ auto_memory:
 "@
             Set-Content -Path $ConfigPath -Value $body -Encoding UTF8
             $result = Test-AutoMaxConfig
-            $result.Valid | Should Be $false
-            ($result.Errors -join "`n") -match 'confidence_threshold' | Should Be $true
-            ($result.Errors -join "`n") -match 'out of range' | Should Be $true
+            $result.Valid | Should -Be $false
+            ($result.Errors -join "`n") -match 'confidence_threshold' | Should -Be $true
+            ($result.Errors -join "`n") -match 'out of range' | Should -Be $true
         }
     }
 
@@ -90,8 +90,8 @@ phase0:
 "@
             Set-Content -Path $ConfigPath -Value $body -Encoding UTF8
             $result = Test-AutoMaxConfig
-            $result.Valid | Should Be $false
-            ($result.Errors -join "`n") -match 'Wrong type' | Should Be $true
+            $result.Valid | Should -Be $false
+            ($result.Errors -join "`n") -match 'Wrong type' | Should -Be $true
         }
     }
 }

@@ -4,13 +4,18 @@
 
 ## Purpose
 
-Prevent brute-force debugging. If a fix fails 3 times, stop and diagnose instead of continuing to guess.
+Prevent brute-force debugging. If a fix fails 3 times, stop that approach and diagnose instead of
+continuing to guess. In autonomous mode, this checkpoint does not revoke standing authority for a
+materially different reversible in-scope recovery.
 
 ## The Rule
 
-**If the same issue fails 3 consecutive fix attempts, STOP.**
+**If the same issue fails 3 consecutive fix attempts, STOP THAT APPROACH.**
 
-Do not attempt a 4th fix. Instead, diagnose the root cause and seek an alternative approach.
+Do not attempt a fourth variation of the same strategy. Diagnose the root cause and seek a
+materially different approach. Manual `obi` may ask for a missing product decision. `obi-auto` and
+`obi-auto-max` append `phase_blocker_fixable` or `check_failure_fixable` and execute a safe codified
+fallback or bounded primary route. Retry exhaustion alone is not a terminal boundary.
 
 ## What Counts as a "Strike"
 
@@ -43,6 +48,9 @@ Output: `3-STRIKE LIMIT: [issue description] failed 3 consecutive times`
 2. **Document attempts** - List what was tried and why it failed
 3. **Analyze pattern** - What do the failures have in common?
 4. **Propose alternative** - Different approach or escalation
+5. **Autonomous disposition** - Record and execute a materially different safe route; halt only for
+   a separately named non-bypassable safety, authority, credential, source, external-write, user
+   abort, ownership, or data-integrity boundary
 
 ### Output Format
 
@@ -71,7 +79,8 @@ Output: `3-STRIKE LIMIT: [issue description] failed 3 consecutive times`
 - Option A: [Alternative approach]
 - Option B: [Escalation path]
 
-Waiting for the user direction.
+Manual mode: waiting for a genuinely missing product decision.
+Autonomous mode: recovery decision appended; materially different bounded route continues.
 ```
 
 ## Prevention
@@ -85,7 +94,8 @@ Before attempting any fix:
 
 Strike counter resets when:
 - the user provides new information that changes the approach
-- A fundamentally different approach is taken
+- A fundamentally different approach is taken, including one selected by the autonomous recovery
+  contract
 - The issue is re-scoped or clarified
 
 Strike counter does NOT reset:
@@ -95,14 +105,17 @@ Strike counter does NOT reset:
 
 ## Context Reset
 
-After 3-strike limit, context pollution from failed attempts may itself be the problem.
-Use `/clear` to reset context and rewrite the prompt from scratch before trying an alternative approach.
+After 3-strike limit, context pollution from failed attempts may itself be the problem. Manual
+Claude workflows may use `/clear`; Codex and autonomous workflows compact settled evidence before
+trying the materially different approach. A context reset never authorizes replaying the same fix.
 
 ## Escalation
 
 If three-strike limit is reached and no alternative is viable:
 1. Document the issue fully
-2. Use `/clear` to reset context if attempting a new approach
-3. Create issue for human investigation
+2. Name the missing source, credential, authority, ownership proof, or safety boundary that makes
+   every alternative non-viable
+3. Create an issue for human investigation only when the original task authorized that external
+   write
 4. Move on to other work if possible
 5. Do not block on unresolvable issues

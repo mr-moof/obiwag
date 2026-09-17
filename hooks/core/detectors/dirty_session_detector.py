@@ -30,7 +30,10 @@ class DirtySessionDetector:
     def run(self, ctx: 'DetectorContext') -> Optional[str]:
         from core.dirty_session import format_dirty_session_nag, get_dirty_file_list
 
-        file_list = get_dirty_file_list(ctx.cwd)
+        # Leave half a second for result formatting/logging and never let git's
+        # own timeout consume Claude's complete Stop-hook budget.
+        timeout_seconds = max(0.1, min(2.5, ctx.remaining_seconds() - 0.5))
+        file_list = get_dirty_file_list(ctx.cwd, timeout_seconds=timeout_seconds)
         if file_list:
             return "\n" + format_dirty_session_nag(file_list)
         return None

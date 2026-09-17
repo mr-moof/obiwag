@@ -1,6 +1,8 @@
 ---
 description: Verify README documentation accurately reflects the code. Check all claims are supported and commands work.
-allowed-tools: Read, Glob, Grep, Bash, Task
+model: sonnet
+effort: medium
+allowed-tools: Read, Glob, Grep, Bash, Write
 ---
 
 # Claude README Review Role
@@ -37,31 +39,17 @@ For each command or example:
 - [ ] Expected output matches reality
 
 ### 4. Check Terminology
-- [ ] Correct platform/tool names
+- [ ] GitHub vs GitHub (use correct platform)
 - [ ] Module names match actual names
 - [ ] Version numbers are current
 
-### 5. Reader Test (Optional — For Significant README Changes)
+### 5. First-Time-Reader Scan (README diff over 30 lines)
 
-When the README has substantial new content (not just minor updates), test it with a fresh sub-agent that has no code context:
-
-Use the Task tool to launch a cold reader:
-```
-Task tool with subagent_type="general-purpose", model="haiku"
-Prompt: "You are a new team member reading this project's README for the first time.
-After reading, answer:
-1. What does this project do?
-2. How do I install and use it?
-3. What was confusing or unclear?
-4. What questions do you still have?
-
-README:
-[full README content]"
-```
-
-Compare the sub-agent's understanding against reality. If it misunderstands key concepts or can't answer basic questions, the README needs revision.
-
-Skip this step for minor README updates (typo fixes, version bumps, small additions).
+This is a heuristic pass by the same reviewer, not a context-free reader. Re-read the README as a
+first-time reader would and flag sections with undefined
+acronyms, forward references, or missing prerequisites. Record these as soft warnings in the
+artifact; they do not by themselves produce `Verdict: NEEDS FIXES`. Skip for minor updates (typo
+fixes, version bumps, small additions).
 
 ## Output Format
 
@@ -69,11 +57,6 @@ The `obi-readme-verifier` subagent produces the README Review Report.
 Must include: Claims Verified table, Commands Tested table, Issues Found, Verdict (PASS / NEEDS FIXES).
 
 ## Completion
-
-On entry, emit the progress bar with README Review active:
-```
-[8/10] ● Disc ━ ● Auth ━ ● Simp ━ ● Rev ━ ● Intg ━ ● ReRv ━ ● Read ━ ◐ RdRv ━ ○ Rel ━ ○ Lrn
-```
 
 - **All verified:** Output `README REVIEW COMPLETE`
 - **Issues found:** Output issues and loop back to README phase
@@ -88,7 +71,7 @@ line of the artifact body MUST be either:
 - `Verdict: PASS` — all claims verified, examples parse; orchestrator advances.
 - `Verdict: NEEDS FIXES` — gaps remain; orchestrator loops back to Phase 7 (README).
 
-Subsequent body content: per-claim status + per-example parse result + cold-reader warnings (if
+Subsequent body content: per-claim status + per-example parse result + first-time-reader warnings (if
 any). The bare signal `README REVIEW COMPLETE` is unchanged; the verdict lives in the artifact
 body and is parsed by the orchestrator. This contract supports the
 `orchestration/inline-fallback-recipes.md` Recipe M when this phase's dispatch fails.

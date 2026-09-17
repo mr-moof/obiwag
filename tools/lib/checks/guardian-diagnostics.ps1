@@ -39,7 +39,18 @@ function Test-CircularDeps {
         return $results
     }
 
-    # Build dependency graph by parsing import statements
+    # Build dependency graph from MODULE-LEVEL imports only.
+    #
+    # Indentation is significant here. A deferred (function-local) import is the standard,
+    # correct way to break an import cycle in Python: it does not execute at import time, so
+    # it cannot cause the ImportError this check exists to catch. The patterns used to be
+    # anchored with `^\s*`, which matched indented imports identically to top-level ones, so
+    # the check reported a permanent false-positive cycle
+    # (session_state <-> memory_reader) whose two edges are BOTH function-local and one of
+    # which is explicitly commented "Imported lazily ... a module-level import would be
+    # circular". A gate that is always red trains readers to ignore it -- which is how the
+    # rigor=max grep gate stayed a silent no-op for months -- so the anchor is now `^`
+    # (column 0) and only real, import-time cycles are reported.
     $graph = @{}
     foreach ($file in $pyFiles) {
         $moduleName = $file.BaseName
@@ -48,15 +59,15 @@ function Test-CircularDeps {
 
         foreach ($line in $content) {
             # Match: from core.xyz import ...
-            if ($line -match '^\s*from\s+core\.(\w+)\s+import') {
+            if ($line -match '^from\s+core\.(\w+)\s+import') {
                 $imports += $Matches[1]
             }
             # Match: import core.xyz
-            elseif ($line -match '^\s*import\s+core\.(\w+)') {
+            elseif ($line -match '^import\s+core\.(\w+)') {
                 $imports += $Matches[1]
             }
             # Match: from .xyz import ... (relative)
-            elseif ($line -match '^\s*from\s+\.(\w+)\s+import') {
+            elseif ($line -match '^from\s+\.(\w+)\s+import') {
                 $imports += $Matches[1]
             }
         }

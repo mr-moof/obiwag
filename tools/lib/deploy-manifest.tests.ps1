@@ -6,12 +6,15 @@
     Split out of tools/deploy.tests.ps1. Covers manifest-driven cleanup target
     selection and the collision-aware removal semantics (#160/#167). These
     cases reproduce the cleanup logic inline (fragment-test style) and remain
-    verbatim from the original suite. Compatible with Pester 3.4.0+.
+    verbatim from the original suite. Requires Pester 5.
 #>
+BeforeAll {
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 . (Join-Path $PSScriptRoot 'deploy-common.ps1')
 . (Join-Path $PSScriptRoot 'deploy-manifest.ps1')
+
+}
 
 Describe 'Deploy Manifest Cleanup' {
 
@@ -22,6 +25,10 @@ Describe 'Deploy Manifest Cleanup' {
         $script:RepoRoot = Join-Path $TempRoot 'obiwag-agents'
         $script:PhasesDir = Join-Path $RepoRoot 'phases'
         $script:SkillsDir = Join-Path $RepoRoot 'skills'
+        $script:OrchestrationDir = Join-Path $RepoRoot 'orchestration'
+        $script:DocsDir = Join-Path $RepoRoot 'docs'
+        $script:PoliciesDir = Join-Path $RepoRoot 'policies'
+        $script:HooksDir = Join-Path $RepoRoot 'hooks'
         $script:PlatformsDir = Join-Path $RepoRoot 'platforms'
         $script:ClaudePlatformDir = Join-Path $PlatformsDir 'claude-code'
         $script:ClaudeAgentsSourceDir = Join-Path $ClaudePlatformDir 'agents'
@@ -32,7 +39,8 @@ Describe 'Deploy Manifest Cleanup' {
         $script:AgentsTarget = Join-Path $ClaudeTarget 'agents'
 
         $dirs = @(
-            $RepoRoot, $PhasesDir, $SkillsDir, $PlatformsDir,
+            $RepoRoot, $PhasesDir, $SkillsDir, $OrchestrationDir, $DocsDir,
+            $PoliciesDir, $HooksDir, $PlatformsDir,
             $ClaudePlatformDir, $ClaudeAgentsSourceDir,
             $HomeDir, $ClaudeTarget, $CommandsTarget, $AgentsTarget
         )
@@ -41,6 +49,7 @@ Describe 'Deploy Manifest Cleanup' {
         }
 
         $script:deployFailures = [System.Collections.Generic.List[object]]::new()
+        $script:obiCollisions = @()
     }
 
     Context 'Cleanup Targets' {
@@ -53,7 +62,7 @@ Describe 'Deploy Manifest Cleanup' {
 
             # These are Obi-managed and safe to clean (per-file, manifest-driven)
             foreach ($target in $cleanupTargets) {
-                ($target -in @('commands', 'agents', 'skills', 'docs', 'hooks')) | Should Be $true
+                ($target -in @('commands', 'agents', 'skills', 'docs', 'hooks')) | Should -Be $true
             }
         }
 
@@ -61,25 +70,25 @@ Describe 'Deploy Manifest Cleanup' {
             $cleanupTargets = @('commands', 'agents', 'skills', 'docs', 'hooks')
 
             # These directories should NOT be in cleanup targets
-            ($cleanupTargets -contains 'projects') | Should Be $false
-            ($cleanupTargets -contains '.obi') | Should Be $false
-            ($cleanupTargets -contains 'plugins') | Should Be $false
+            ($cleanupTargets -contains 'projects') | Should -Be $false
+            ($cleanupTargets -contains '.obi') | Should -Be $false
+            ($cleanupTargets -contains 'plugins') | Should -Be $false
         }
 
         It 'Removes and recreates directories cleanly' {
             # Simulate stale file in commands/
             $staleFile = Join-Path $CommandsTarget 'stale-command.md'
             Set-Content $staleFile 'stale content' -Encoding UTF8
-            (Test-Path $staleFile) | Should Be $true
+            (Test-Path $staleFile) | Should -Be $true
 
             # Cleanup
             Remove-Item -Path $CommandsTarget -Recurse -Force
-            (Test-Path $CommandsTarget) | Should Be $false
+            (Test-Path $CommandsTarget) | Should -Be $false
 
             # Recreate
             New-Item -ItemType Directory -Path $CommandsTarget -Force | Out-Null
-            (Test-Path $CommandsTarget) | Should Be $true
-            (Get-ChildItem $CommandsTarget).Count | Should Be 0
+            (Test-Path $CommandsTarget) | Should -Be $true
+            (Get-ChildItem $CommandsTarget).Count | Should -Be 0
         }
 
         It 'Per-file hooks cleanup removes obi files but preserves sentinels (#160)' {
@@ -99,8 +108,8 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path (Join-Path $hooksTarget 'session_start.py')) | Should Be $false
-            (Test-Path (Join-Path $hooksTarget 'me_custom_hook.py')) | Should Be $true
+            (Test-Path (Join-Path $hooksTarget 'session_start.py')) | Should -Be $false
+            (Test-Path (Join-Path $hooksTarget 'me_custom_hook.py')) | Should -Be $true
         }
     }
 
@@ -125,9 +134,9 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path $obiSkill) | Should Be $false
-            (Test-Path $userSkill) | Should Be $true
-            (Get-Content (Join-Path $userSkill 'SKILL.md')) | Should Be 'user skill'
+            (Test-Path $obiSkill) | Should -Be $false
+            (Test-Path $userSkill) | Should -Be $true
+            (Get-Content (Join-Path $userSkill 'SKILL.md')) | Should -Be 'user skill'
         }
 
         It 'Preserves non-obi skill directories during cleanup' {
@@ -148,15 +157,15 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path $userSkillA) | Should Be $true
-            (Test-Path $userSkillB) | Should Be $true
+            (Test-Path $userSkillA) | Should -Be $true
+            (Test-Path $userSkillB) | Should -Be $true
         }
 
         It 'Removes obi-owned commands but preserves user commands' {
             # Simulate commands dir with obi + user commands
             Set-Content (Join-Path $CommandsTarget 'discovery.md') 'obi cmd' -Encoding UTF8
             Set-Content (Join-Path $CommandsTarget 'obi.md') 'obi cmd' -Encoding UTF8
-            Set-Content (Join-Path $CommandsTarget 'user-cmd.md') 'user cmd' -Encoding UTF8
+            Set-Content (Join-Path $CommandsTarget 'user-command.md') 'user cmd' -Encoding UTF8
 
             $obiOwnedCommands = @('discovery.md', 'obi.md')
             foreach ($cmd in $obiOwnedCommands) {
@@ -166,9 +175,9 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path (Join-Path $CommandsTarget 'discovery.md')) | Should Be $false
-            (Test-Path (Join-Path $CommandsTarget 'obi.md')) | Should Be $false
-            (Test-Path (Join-Path $CommandsTarget 'user-cmd.md')) | Should Be $true
+            (Test-Path (Join-Path $CommandsTarget 'discovery.md')) | Should -Be $false
+            (Test-Path (Join-Path $CommandsTarget 'obi.md')) | Should -Be $false
+            (Test-Path (Join-Path $CommandsTarget 'user-command.md')) | Should -Be $true
         }
 
         It 'Removes obi-owned agents but preserves user agents' {
@@ -183,8 +192,8 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path (Join-Path $AgentsTarget 'obi-wag.md')) | Should Be $false
-            (Test-Path (Join-Path $AgentsTarget 'my-custom-agent.md')) | Should Be $true
+            (Test-Path (Join-Path $AgentsTarget 'obi-wag.md')) | Should -Be $false
+            (Test-Path (Join-Path $AgentsTarget 'my-custom-agent.md')) | Should -Be $true
         }
 
         It 'Falls back to repo enumeration when manifest does not exist' {
@@ -197,9 +206,9 @@ Describe 'Deploy Manifest Cleanup' {
 
             $obiOwnedSkills = @(Get-ChildItem -Path $repoSkills -Directory | ForEach-Object { $_.Name })
 
-            $obiOwnedSkills.Count | Should Be 2
-            ($obiOwnedSkills -contains 'verify') | Should Be $true
-            ($obiOwnedSkills -contains 'sql-safety') | Should Be $true
+            $obiOwnedSkills.Count | Should -Be 2
+            ($obiOwnedSkills -contains 'verify') | Should -Be $true
+            ($obiOwnedSkills -contains 'sql-safety') | Should -Be $true
         }
 
         It 'Parses obi-owned skills from manifest JSON' {
@@ -227,13 +236,13 @@ Describe 'Deploy Manifest Cleanup' {
             $parsedCommands = @($manifestKeys | Where-Object { $_ -match '^commands/(.+)$' } | ForEach-Object { $Matches[1] })
             $parsedAgents = @($manifestKeys | Where-Object { $_ -match '^agents/(.+)$' } | ForEach-Object { $Matches[1] })
 
-            $parsedSkills.Count | Should Be 2
-            ($parsedSkills -contains 'verify') | Should Be $true
-            ($parsedSkills -contains 'sql-safety') | Should Be $true
-            $parsedCommands.Count | Should Be 1
-            $parsedCommands[0] | Should Be 'discovery.md'
-            $parsedAgents.Count | Should Be 1
-            $parsedAgents[0] | Should Be 'obi-wag.md'
+            $parsedSkills.Count | Should -Be 2
+            ($parsedSkills -contains 'verify') | Should -Be $true
+            ($parsedSkills -contains 'sql-safety') | Should -Be $true
+            $parsedCommands.Count | Should -Be 1
+            $parsedCommands[0] | Should -Be 'discovery.md'
+            $parsedAgents.Count | Should -Be 1
+            $parsedAgents[0] | Should -Be 'obi-wag.md'
         }
 
         It 'Per-file cleanup of docs/ preserves user-authored sentinels (#160)' {
@@ -253,8 +262,8 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path (Join-Path $docsTarget 'gotchas.md')) | Should Be $false
-            (Test-Path (Join-Path $docsTarget 'me-cheatsheet.md')) | Should Be $true
+            (Test-Path (Join-Path $docsTarget 'gotchas.md')) | Should -Be $false
+            (Test-Path (Join-Path $docsTarget 'me-cheatsheet.md')) | Should -Be $true
         }
 
         It 'Per-file cleanup of hooks/ preserves user-authored sentinels (#160)' {
@@ -274,8 +283,8 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            (Test-Path (Join-Path $hooksTarget 'post_tool_use.py')) | Should Be $false
-            (Test-Path (Join-Path $hooksTarget 'me-personal-hook.py')) | Should Be $true
+            (Test-Path (Join-Path $hooksTarget 'post_tool_use.py')) | Should -Be $false
+            (Test-Path (Join-Path $hooksTarget 'me-personal-hook.py')) | Should -Be $true
         }
 
         It 'LiteralPath disables wildcard glob in manifest entries (#160 Codex Recipe 1 #1)' {
@@ -297,9 +306,9 @@ Describe 'Deploy Manifest Cleanup' {
             # which doesn't exist, so cleanup is a no-op — user files survive.
             $literalExists = Test-Path -LiteralPath $docFile
 
-            $literalExists | Should Be $false
-            (Test-Path -LiteralPath (Join-Path $docsTarget 'user-cheatsheet.md')) | Should Be $true
-            (Test-Path -LiteralPath (Join-Path $docsTarget 'another-user-doc.md')) | Should Be $true
+            $literalExists | Should -Be $false
+            (Test-Path -LiteralPath (Join-Path $docsTarget 'user-cheatsheet.md')) | Should -Be $true
+            (Test-Path -LiteralPath (Join-Path $docsTarget 'another-user-doc.md')) | Should -Be $true
         }
 
         It 'Root-containment guard rejects ../ traversal in manifest entry (#160)' {
@@ -322,9 +331,9 @@ Describe 'Deploy Manifest Cleanup' {
             }
             $isUnderRoot = $resolvedCandidate.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
 
-            $isUnderRoot | Should Be $false
+            $isUnderRoot | Should -Be $false
             # The guard's contract: skip-and-warn, do NOT delete outside file
-            (Test-Path $outsideFile) | Should Be $true
+            (Test-Path $outsideFile) | Should -Be $true
         }
 
         It 'Root-containment guard rejects absolute path in manifest entry (#160)' {
@@ -338,6 +347,12 @@ Describe 'Deploy Manifest Cleanup' {
                 param([string]$CandidatePath, [string]$Root)
                 try {
                     $resolvedCandidate = [System.IO.Path]::GetFullPath($CandidatePath)
+                    # Mirrors production: an embedded drive spec only makes GetFullPath
+                    # THROW under .NET Framework (5.1). On pwsh 7 it returns the string
+                    # verbatim, so reject an embedded volume separator explicitly.
+                    if ($resolvedCandidate.IndexOf([System.IO.Path]::VolumeSeparatorChar, 2) -ge 0) {
+                        return $false
+                    }
                     $resolvedRoot = [System.IO.Path]::GetFullPath($Root)
                     if (-not $resolvedRoot.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
                         $resolvedRoot += [System.IO.Path]::DirectorySeparatorChar
@@ -352,12 +367,14 @@ Describe 'Deploy Manifest Cleanup' {
             # cleanly, comparison rejects.
             $absoluteOutside = 'C:\Windows\notepad.exe'
             $candidate1 = Join-Path $hooksTarget $absoluteOutside
-            (TestUnderRootInline -CandidatePath $candidate1 -Root $hooksTarget) | Should Be $false
+            (TestUnderRootInline -CandidatePath $candidate1 -Root $hooksTarget) | Should -Be $false
 
-            # Case 2: malformed path with embedded drive letter — GetFullPath
-            # throws; the guard's try/catch returns $false (safe-default reject).
+            # Case 2: malformed path with embedded drive letter. Host-dependent:
+            # on 5.1 GetFullPath throws and the try/catch rejects; on pwsh 7 it
+            # returns the string verbatim, so the explicit volume-separator check
+            # is what rejects it. Both hosts must reach $false.
             $malformed = "$hooksTarget\C:\evil.exe"
-            (TestUnderRootInline -CandidatePath $malformed -Root $hooksTarget) | Should Be $false
+            (TestUnderRootInline -CandidatePath $malformed -Root $hooksTarget) | Should -Be $false
         }
 
         It 'Collision-aware cleanup records collision when target differs from source (#167)' {
@@ -375,7 +392,7 @@ Describe 'Deploy Manifest Cleanup' {
 
             $tgtHash = (Get-FileHash -LiteralPath $targetFile -Algorithm SHA256).Hash
             $srcHash = (Get-FileHash -LiteralPath $sourceFile -Algorithm SHA256).Hash
-            ($tgtHash -ne $srcHash) | Should Be $true
+            ($tgtHash -ne $srcHash) | Should -Be $true
 
             # Without -Force: collision detected, target preserved
             $collisions = @()
@@ -390,9 +407,9 @@ Describe 'Deploy Manifest Cleanup' {
                 }
             }
 
-            $collisions.Count | Should Be 1
-            (Test-Path -LiteralPath $targetFile) | Should Be $true
-            (Get-Content $targetFile -Raw).Trim() | Should Be '# User-modified discovery'
+            $collisions.Count | Should -Be 1
+            (Test-Path -LiteralPath $targetFile) | Should -Be $true
+            (Get-Content $targetFile -Raw).Trim() | Should -Be '# User-modified discovery'
         }
 
         It 'Collision-aware cleanup with -Force backs up user version and removes (#167)' {
@@ -419,9 +436,9 @@ Describe 'Deploy Manifest Cleanup' {
                 Remove-Item -LiteralPath $targetFile -Force
             }
 
-            (Test-Path -LiteralPath $targetFile) | Should Be $false
-            (Test-Path -LiteralPath "$targetFile.user-backup") | Should Be $true
-            (Get-Content "$targetFile.user-backup" -Raw).Trim() | Should Be '# user-edited'
+            (Test-Path -LiteralPath $targetFile) | Should -Be $false
+            (Test-Path -LiteralPath "$targetFile.user-backup") | Should -Be $true
+            (Get-Content "$targetFile.user-backup" -Raw).Trim() | Should -Be '# user-edited'
         }
 
         It 'Collision-aware cleanup preserves earliest .user-backup across -Force runs (#167)' {
@@ -446,7 +463,8 @@ Describe 'Deploy Manifest Cleanup' {
             }
 
             # Original backup content unchanged — earliest version preserved
-            (Get-Content $backupPath -Raw).Trim() | Should Be '# user-v1 (original)'
+            (Get-Content $backupPath -Raw).Trim() | Should -Be '# user-v1 (original)'
         }
     }
+
 }

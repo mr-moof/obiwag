@@ -1,9 +1,12 @@
 <#
 .SYNOPSIS
-    Pester 3.4 tests for tools/parse-plan-phase0.ps1.
+    Pester 5 tests for tools/parse-plan-phase0.ps1.
 #>
+BeforeAll {
 
 $ScriptPath = Join-Path $PSScriptRoot 'parse-plan-phase0.ps1'
+
+}
 
 Describe 'parse-plan-phase0' {
 
@@ -16,7 +19,7 @@ Describe 'parse-plan-phase0' {
         It 'returns empty array when plan has no phase0 block' {
             Set-Content -Path $PlanPath -Value '# Plan with no phase0' -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
-            $output | Should Be '[]'
+            $output | Should -Be '[]'
         }
     }
 
@@ -37,13 +40,13 @@ phase0:
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            @($obj).Count | Should Be 1
-            $obj[0].id | Should Be 'target_namespace'
-            $obj[0].question | Should Be 'Where does the fork land?'
-            $obj[0].placeholder | Should Be '<target-namespace>'
-            @($obj[0].options).Count | Should Be 3
-            $obj[0].default | Should Be 'group'
-            $obj[0].locks_field | Should Be 'bootstrap-config.json:repoBase'
+            @($obj).Count | Should -Be 1
+            $obj[0].id | Should -Be 'target_namespace'
+            $obj[0].question | Should -Be 'Where does the fork land?'
+            $obj[0].placeholder | Should -Be '<target-namespace>'
+            @($obj[0].options).Count | Should -Be 3
+            $obj[0].default | Should -Be 'group'
+            $obj[0].locks_field | Should -Be 'bootstrap-config.json:repoBase'
         }
     }
 
@@ -62,10 +65,10 @@ phase0:
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            @($obj).Count | Should Be 3
-            $obj[0].id | Should Be 'first_question'
-            $obj[1].id | Should Be 'second_question'
-            $obj[2].id | Should Be 'third_question'
+            @($obj).Count | Should -Be 3
+            $obj[0].id | Should -Be 'first_question'
+            $obj[1].id | Should -Be 'second_question'
+            $obj[2].id | Should -Be 'third_question'
         }
     }
 
@@ -81,7 +84,7 @@ phase0:
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            $obj[0].free_text | Should Be $true
+            $obj[0].free_text | Should -Be $true
         }
 
         It 'defaults free_text to false when absent' {
@@ -93,7 +96,7 @@ phase0:
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            $obj[0].free_text | Should Be $false
+            $obj[0].free_text | Should -Be $false
         }
     }
 
@@ -112,8 +115,8 @@ verification:
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            @($obj).Count | Should Be 1
-            $obj[0].id | Should Be 'q1'
+            @($obj).Count | Should -Be 1
+            $obj[0].id | Should -Be 'q1'
         }
 
         It 'stops at code-fence boundary' {
@@ -128,8 +131,8 @@ not part of block
             Set-Content -Path $PlanPath -Value $body -Encoding UTF8
             $output = & $ScriptPath -PlanPath $PlanPath
             $obj = $output | ConvertFrom-Json
-            @($obj).Count | Should Be 1
-            $obj[0].id | Should Be 'only_one'
+            @($obj).Count | Should -Be 1
+            $obj[0].id | Should -Be 'only_one'
         }
     }
 
@@ -138,7 +141,7 @@ not part of block
         It 'exits non-zero when plan file missing' {
             $missing = Join-Path $TestDrive 'no-such.md'
             $err = & $ScriptPath -PlanPath $missing 2>&1
-            ($err -join "`n") -match 'Plan file not found' | Should Be $true
+            ($err -join "`n") -match 'Plan file not found' | Should -Be $true
         }
     }
 }

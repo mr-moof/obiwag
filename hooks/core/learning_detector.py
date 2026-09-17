@@ -25,7 +25,7 @@ GOTCHA_INDICATORS = [
 
     # Git issues
     (r'(wrong|incorrect)\s*(branch|repo|repository)', 'git', 'docs/gotchas.md'),
-    (r'(email|author).*(not your personal|git config|@\w+\.\w+)', 'git', 'docs/gotchas.md'),
+    (r'(email|author).*(wrong|incorrect|identity)', 'git', 'docs/gotchas.md'),
     (r'(force\s*push|push\s*--force)', 'git', 'docs/gotchas.md'),
     (r'(merge\s*conflict|conflict)', 'git', 'docs/gotchas.md'),
 
@@ -202,7 +202,7 @@ def detect_learnings(
 
     # Vendor/reference detectors scan only genuine conversation text (user +
     # assistant turns), with the injected skills catalog and tool_result
-    # feedback excluded. Stops the skills list ("...Analytics MCP servers...")
+    # feedback excluded. Stops the skills list ("...ExampleDB MCP servers...")
     # from tripping reference_impl. Falls back to raw transcript if the
     # extractor yields nothing. (detector-noise fix)
     convo_text = transcript
@@ -332,7 +332,7 @@ def format_learnings_summary(learnings: List[Learning]) -> str:
         lines.append("")
 
     lines.append("Sync these learnings to obiwag-agents repo?")
-    lines.append("  yes  = commit & push to the remote")
+    lines.append("  yes  = commit & push to GitHub")
     lines.append("  no   = discard")
     lines.append("  edit = review before committing")
     lines.append("═" * 67)

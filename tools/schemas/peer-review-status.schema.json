@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Obi peer-review transport status v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "run_mode", "provider", "adapter_version",
+    "cli_version", "request_sha256", "capsule_sha256", "transport_status",
+    "terminal", "review_verdict", "validation_status", "worker_pid",
+    "worker_started_at_epoch", "pid", "ownership_mode", "started_at",
+    "deadline_at", "updated_at", "heartbeat_at", "last_activity_at",
+    "last_event_at", "terminal_at", "cancel_requested_at",
+    "result_consumed_at", "exit_code", "killed", "kill_verified",
+    "activity_kind", "cpu_time_sec", "last_activity_age_sec", "events_bytes",
+    "stderr_bytes", "result_bytes", "detail", "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 2},
+    "run_id": {"type": "string", "minLength": 1},
+    "run_mode": {"type": "string", "enum": ["foreground", "broker"]},
+    "provider": {"type": "string", "enum": ["codex", "claude"]},
+    "adapter_version": {"type": "string"},
+    "cli_version": {"type": ["string", "null"]},
+    "request_sha256": {"type": ["string", "null"]},
+    "capsule_sha256": {"type": ["string", "null"]},
+    "transport_status": {
+      "type": "string",
+      "enum": [
+        "queued", "preparing", "launching", "running", "cancel_requested",
+        "completed", "unavailable", "timed_out", "idle_killed",
+        "output_limit", "error", "launch_error", "cancelled", "owner_lost",
+        "stalled_killed"
+      ]
+    },
+    "terminal": {"type": "boolean"},
+    "review_verdict": {"type": ["string", "null"], "enum": ["pass", "fail", "inconclusive", null]},
+    "validation_status": {"type": ["string", "null"], "enum": ["valid", "partial", "invalid", "not_run", null]},
+    "worker_pid": {"type": ["integer", "null"]},
+    "worker_started_at_epoch": {"type": ["number", "null"]},
+    "pid": {"type": ["integer", "null"]},
+    "ownership_mode": {"type": ["string", "null"]},
+    "started_at": {"type": "string"},
+    "deadline_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "heartbeat_at": {"type": ["string", "null"]},
+    "last_activity_at": {"type": ["string", "null"]},
+    "last_event_at": {"type": ["string", "null"]},
+    "terminal_at": {"type": ["string", "null"]},
+    "cancel_requested_at": {"type": ["string", "null"]},
+    "result_consumed_at": {"type": ["string", "null"]},
+    "exit_code": {"type": ["integer", "null"]},
+    "killed": {"type": "boolean"},
+    "kill_verified": {"type": "boolean"},
+    "activity_kind": {"type": ["string", "null"]},
+    "cpu_time_sec": {"type": "number", "minimum": 0},
+    "last_activity_age_sec": {"type": "number", "minimum": 0},
+    "events_bytes": {"type": "integer", "minimum": 0},
+    "stderr_bytes": {"type": "integer", "minimum": 0},
+    "result_bytes": {"type": "integer", "minimum": 0},
+    "detail": {"type": ["string", "null"]},
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request", "manifest", "status", "events", "stderr", "raw_result",
+        "result", "summary", "cancel_request"
+      ],
+      "properties": {
+        "request": {"type": "string"},
+        "manifest": {"type": "string"},
+        "status": {"type": "string"},
+        "events": {"type": "string"},
+        "stderr": {"type": "string"},
+        "raw_result": {"type": "string"},
+        "result": {"type": "string"},
+        "summary": {"type": "string"},
+        "cancel_request": {"type": "string"}
+      }
+    }
+  }
+}

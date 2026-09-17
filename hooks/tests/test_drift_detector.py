@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +36,18 @@ class TestFileHash:
     def test_hash_missing_file(self):
         """Hash of a nonexistent file returns None."""
         assert file_hash("/nonexistent/path/file.txt") is None
+
+    def test_expired_deadline_returns_none(self, tmp_path):
+        target = tmp_path / "deadline.txt"
+        target.write_bytes(b"x" * 1024)
+        assert file_hash(str(target), time.monotonic() - 1) is None
+
+    def test_crlf_normalization_across_chunk_boundary(self, tmp_path):
+        crlf = tmp_path / "crlf.txt"
+        lf = tmp_path / "lf.txt"
+        crlf.write_bytes((b"x" * (1024 * 1024 - 1)) + b"\r\nend")
+        lf.write_bytes((b"x" * (1024 * 1024 - 1)) + b"\nend")
+        assert file_hash(str(crlf)) == file_hash(str(lf))
 
     def test_same_content_same_hash(self, tmp_path):
         """Two files with identical content produce the same hash."""
@@ -347,15 +360,15 @@ class TestDetectDrift:
                 assert 'skills/reviewing-code/references/extra.md' in rels
 
     def test_unmanifested_skipped_in_externally_managed_skill(self, tmp_path):
-        """Skips skill subdirs that have zero manifest entries (e.g. external-skill)."""
+        """Skips skill subdirs that have zero manifest entries (e.g. coordinator-healthcheck)."""
         source = tmp_path / "source"
         source.mkdir()
         deployed = tmp_path / "deployed"
 
         # Externally-managed skill has no manifest entry; its files must NOT be flagged
-        (deployed / "skills" / "external-skill").mkdir(parents=True)
-        (deployed / "skills" / "external-skill" / "SKILL.md").write_text("ext")
-        (deployed / "skills" / "external-skill" / "extra.md").write_text("ext")
+        (deployed / "skills" / "coordinator-healthcheck").mkdir(parents=True)
+        (deployed / "skills" / "coordinator-healthcheck" / "SKILL.md").write_text("ext")
+        (deployed / "skills" / "coordinator-healthcheck" / "extra.md").write_text("ext")
 
         # Manifest is non-empty (so load_manifest() returns it) but covers a different skill
         (deployed / "skills" / "other").mkdir(parents=True)
@@ -371,7 +384,7 @@ class TestDetectDrift:
             with patch('core.drift_detector.get_deployed_root', return_value=str(deployed)):
                 result = detect_drift()
                 rels = [d['relative'] for d in result['drifted']]
-                assert not any(r.startswith('skills/external-skill/') for r in rels)
+                assert not any(r.startswith('skills/coordinator-healthcheck/') for r in rels)
                 assert result['total_drifted'] == 0
 
 

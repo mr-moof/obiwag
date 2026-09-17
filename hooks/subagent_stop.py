@@ -83,37 +83,51 @@ def _read_tail(path, max_bytes=8192):
 def _append_completion(phase, signal, agent_id, source):
     """Append a completion record to dispatch-state.json.
 
-    Read-modify-write with graceful handling of missing/malformed file.
+    Uses a bounded cross-process lock and atomic replace so simultaneous
+    SubagentStop hooks cannot lose one another's completion receipts. Returns
+    True only after the record is durably published.
     """
+    from core.hook_logger import log_swallowed
+    from core.session_state import StateUnavailable, bounded_file_lock
+
     ds_path = os.path.join('.obi', 'state', 'dispatch-state.json')
-    ds = None
+    lock_path = ds_path + '.lock'
+    tmp_path = f"{ds_path}.{os.getpid()}.tmp"
     try:
-        with open(ds_path, 'r', encoding='utf-8') as f:
-            ds = json.load(f)
-    except (OSError, json.JSONDecodeError, ValueError):
-        pass
+        with bounded_file_lock(lock_path, timeout=0.5):
+            try:
+                with open(ds_path, 'r', encoding='utf-8') as f:
+                    ds = json.load(f)
+            except FileNotFoundError:
+                ds = {}
+            except (json.JSONDecodeError, ValueError):
+                ds = {}
 
-    if not isinstance(ds, dict):
-        ds = {}
+            if not isinstance(ds, dict):
+                ds = {}
+            completions = ds.get('completions')
+            if not isinstance(completions, list):
+                completions = []
+            completions.append({
+                "ts": datetime.now().isoformat(),
+                "agent_id": agent_id or "",
+                "phase": phase,
+                "signal": signal,
+                "source": source,
+            })
+            ds['completions'] = completions[-100:]
 
-    completions = ds.get('completions')
-    if not isinstance(completions, list):
-        completions = []
-
-    completions.append({
-        "ts": datetime.now().isoformat(),
-        "agent_id": agent_id or "",
-        "phase": phase,
-        "signal": signal,
-        "source": source,
-    })
-    ds['completions'] = completions
-
-    try:
-        with open(ds_path, 'w', encoding='utf-8') as f:
-            json.dump(ds, f, indent=2)
-    except OSError:
-        pass  # best-effort
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(ds, f, indent=2)
+            os.replace(tmp_path, ds_path)
+            return True
+    except (OSError, StateUnavailable) as exc:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        log_swallowed('subagent_completion_write', exc)
+        return False
 
 
 def _handle(input_data, timer):
@@ -145,7 +159,15 @@ def _handle(input_data, timer):
         timer.set_output_summary(f"signal={signal} but unknown phase")
         return {}
 
-    _append_completion(phase, signal, agent_id, source)
+    if not _append_completion(phase, signal, agent_id, source):
+        timer.set_output_summary(f"completion not persisted: phase={phase}")
+        return {
+            "systemMessage": (
+                f"[Obi] Phase {phase} emitted {signal}, but its completion receipt "
+                "could not be persisted. Re-read .obi/state/dispatch-state.json "
+                "before advancing."
+            )
+        }
     timer.set_output_summary(f"recorded: phase={phase} signal={signal}")
     return {}
 

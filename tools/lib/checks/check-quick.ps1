@@ -7,10 +7,10 @@
     No script-scope variable assumptions beyond those already set by the dispatcher.
 
     Provides:
-    - Test-QuickSetup  (VS-1..VS-11: env vars, CLI availability, settings parsing,
-                        commands deployed, permissions, git access)
+    - Test-QuickSetup  (VS-1..VS-12: env vars, CLI availability, settings parsing,
+                        commands deployed, permissions, git access, peer harness)
 
-    VS-12 (hook execution) is intentionally omitted -- it is a runtime check
+    VS-13 (hook execution) is intentionally omitted -- it is a runtime check
     already covered by healthcheck.py HC-5.
 #>
 
@@ -113,11 +113,11 @@ function Test-QuickSetup {
     $commandsDir = Join-Path $env:USERPROFILE '.claude\commands'
     if (Test-Path $commandsDir) {
         $expectedCommands = @(
-            'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+            'author.md', 'discovery.md', 'integrate.md',
             'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
             'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
             'readme-review.md', 'release.md', 're-review.md', 'review.md',
-            'simplify.md', 'triage.md'
+            'simplify.md'
         )
         $foundCount = 0
         $missingCommands = @()
@@ -164,23 +164,27 @@ function Test-QuickSetup {
         }
     }
 
-    # VS-10: Project-local override detection
-    $projectSettings = '.\.claude\settings.local.json'
+    # VS-10: Project-local permission scope. Claude merges permission arrays across
+    # scopes; a shorter project allow list does not replace the user allow list.
+    # Deny rules retain precedence and are reported when they exactly overlap a
+    # user allow rule. Project settings are never grounds for destructive cleanup.
+    $projectSettings = if ($projectRoot) {
+        Join-Path $projectRoot '.claude\settings.local.json'
+    } else {
+        Join-Path (Get-Location) '.claude\settings.local.json'
+    }
     if (Test-Path $projectSettings) {
         try {
             $projJson = Get-Content $projectSettings -Raw | ConvertFrom-Json
-            $projPerms = $projJson.permissions.allow
-            $projCount = if ($projPerms) { $projPerms.Count } else { 0 }
+            $projPerms = @($projJson.permissions.allow | Where-Object { $null -ne $_ })
+            $projDenies = @($projJson.permissions.deny | Where-Object { $null -ne $_ })
+            Write-Check "Project settings: $($projPerms.Count) allow, $($projDenies.Count) deny (arrays merge across scopes)"
             if (Test-Path $settingsJson) {
                 $userJson2 = Get-Content $settingsJson -Raw | ConvertFrom-Json
-                $uc = if ($userJson2.permissions -and $userJson2.permissions.allow) { $userJson2.permissions.allow.Count } else { 0 }
-                if ($projCount -lt $uc -and $uc -gt 0) {
-                    if ($projJson._managed_by -eq 'obi-deploy') {
-                        # Intentional obi-deployed project override (Issue #74) -not a problem.
-                        Write-Check "Project-local settings.local.json (obi-managed, $projCount permissions)"
-                    } else {
-                        Write-Problem "PROJECT-LOCAL OVERRIDE: $projectSettings ($projCount vs $uc user permissions)"
-                    }
+                $userAllows = @($userJson2.permissions.allow | ForEach-Object { [string]$_ })
+                $denyConflicts = @($projDenies | Where-Object { $userAllows -contains [string]$_ })
+                if ($denyConflicts.Count -gt 0) {
+                    Write-Problem "Project deny rules take precedence over matching user allows: $($denyConflicts[0..([Math]::Min(2, $denyConflicts.Count - 1))] -join ', ')"
                 }
             }
         } catch {
@@ -204,6 +208,58 @@ function Test-QuickSetup {
         } finally {
             Pop-Location
         }
+    }
+
+    # VS-12: canonical peer-review harness is complete and legacy entry points are absent.
+    $peerFiles = @(
+        'peer-review.ps1',
+        'peer-review.py',
+        'peer_review\__init__.py',
+        'peer_review\adapters.py',
+        'peer_review\broker.py',
+        'peer_review\cli.py',
+        'peer_review\io_utils.py',
+        'peer_review\packet.py',
+        'peer_review\process_control.py',
+        'peer_review\runner.py',
+        'peer_review\validation.py',
+        'schemas\peer-review-request.schema.json',
+        'schemas\peer-review-scope-manifest.schema.json',
+        'schemas\peer-review-result.schema.json',
+        'schemas\peer-review-status.schema.json'
+    )
+    $missingPeerFiles = @($peerFiles | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $ScriptDir $_) -PathType Leaf)
+    })
+    if ($missingPeerFiles.Count -gt 0) {
+        $results.Valid = $false
+        $results.Errors += "Peer harness incomplete (missing: $($missingPeerFiles -join ', '))"
+        Write-Problem "Peer harness incomplete: $($missingPeerFiles.Count) file(s) missing"
+    } else {
+        Write-Check "Peer harness complete: $($peerFiles.Count)/$($peerFiles.Count)"
+    }
+
+    $legacyPeerPaths = @(
+        'codex-run.ps1',
+        'codex-plan-prep.ps1',
+        'schemas\codex-plan-critique.schema.json'
+    )
+    $activeLegacyPaths = @($legacyPeerPaths | Where-Object {
+        Test-Path -LiteralPath (Join-Path $ScriptDir $_)
+    })
+    if ($activeLegacyPaths.Count -gt 0) {
+        $results.Valid = $false
+        $results.Errors += "Retired peer-review paths remain active: $($activeLegacyPaths -join ', ')"
+        Write-Problem "Retired peer-review paths remain active: $($activeLegacyPaths -join ', ')"
+    }
+
+    $stalePeerSkill = Join-Path $env:USERPROFILE '.agents\skills\codex-adversarial-review'
+    if (Test-Path -LiteralPath $stalePeerSkill) {
+        $results.Valid = $false
+        $results.Errors += "Retired unmanaged peer skill remains active: $stalePeerSkill"
+        Write-Problem "Retired unmanaged peer skill remains active: $stalePeerSkill"
+    } else {
+        Write-Check 'Retired unmanaged peer skill absent'
     }
 
     return $results

@@ -9,7 +9,7 @@
     Returns {mirror_exists, last_sync, target_path}.
 
 .PARAMETER SourceProj
-    The source project full path (e.g. "owner/quiet-shift").
+    The source project full path (e.g. "owner/example-project").
     Currently advisory only; not used for the existence check.
 
 .PARAMETER Repo

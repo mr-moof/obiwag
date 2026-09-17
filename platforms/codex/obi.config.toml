@@ -1,0 +1,8 @@
+# Obi coordinator and routine-phase baseline. Discovery and Author explicitly
+# override spawned phase agents to gpt-5.6-sol/xhigh in AGENTS.md.
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+
+[agents]
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"

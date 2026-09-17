@@ -1,18 +1,19 @@
 {
+  "_note": "expected_key asserts a key must be present in the hook's JSON output. Do NOT set it for user_prompt_submit: an empty {} is correct there whenever the probe's topic was already grounded for that session_id, so the assertion would pass once and then warn until the state file ages out.",
   "hooks": [
     {"file": "hook_wrapper.cmd", "type": "wrapper"},
     {"file": "session_start.py", "type": "hook", "event": "SessionStart", "test_input": "{}", "expected_key": "hookSpecificOutput"},
+    {"file": "user_prompt_submit.py", "type": "hook", "event": "UserPromptSubmit", "test_input": "{\"prompt\": \"widgetapi update set\", \"session_id\": \"healthcheck-probe\"}"},
     {"file": "pre_tool_use.py",  "type": "hook", "event": "PreToolUse",  "test_input": "{\"tool_name\": \"test\"}"},
     {"file": "post_tool_use.py", "type": "hook", "event": "PostToolUse", "test_input": "{\"tool_name\": \"test\"}"},
+    {"file": "pre_compact.py",   "type": "hook", "event": "PreCompact",  "test_input": "{}"},
     {"file": "stop.py",          "type": "hook", "event": "Stop",        "test_input": "{\"transcript\": \"\"}"},
     {"file": "subagent_stop.py", "type": "hook", "event": "SubagentStop", "test_input": "{\"agent_id\": \"obi-discovery\", \"last_assistant_message\": \"DISCOVERY COMPLETE\"}"}
   ],
   "core_modules": [
     "__init__.py",
     "calibration.py",
-    "correction_retriever.py",
     "drift_detector.py",
-    "git_sync.py",
     "hook_error_handler.py",
     "hook_logger.py",
     "learning_detector.py",
@@ -20,6 +21,8 @@
     "memory_reader.py",
     "paths.py",
     "pattern_matcher.py",
+    "peer_review_guard.py",
+    "detectors/peer_review_ownership_detector.py",
     "project_memory.py",
     "quality_signals.py",
     "session_state.py",

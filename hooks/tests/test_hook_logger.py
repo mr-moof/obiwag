@@ -16,6 +16,7 @@ from core.hook_logger import (
     HookTimer,
     _percentile,
     _rotate_log_if_needed,
+    append_rotating_jsonl,
     get_hook_log_path,
     get_hook_stats,
     get_hook_stats_extended,
@@ -268,6 +269,35 @@ class TestRotateLogIfNeeded:
         log_file = tmp_path / 'missing.jsonl'
         # Should not raise
         _rotate_log_if_needed(log_file)
+
+    def test_rotation_keeps_only_complete_recent_lines(self, tmp_path):
+        log_file = tmp_path / 'test.jsonl'
+        for index in range(100):
+            append_rotating_jsonl(
+                log_file,
+                {'index': index, 'payload': 'x' * 30},
+                max_size_bytes=1000,
+            )
+
+        entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        assert entries
+        assert entries[-1]['index'] == 99
+        assert log_file.stat().st_size <= 1000
+
+    def test_recent_log_read_is_bounded_to_complete_tail(self, tmp_path):
+        log_file = tmp_path / 'test.jsonl'
+        old = {'timestamp': '2026-01-01T00:00:00Z', 'hook_name': 'Old'}
+        recent = {'timestamp': '2026-01-02T00:00:00Z', 'hook_name': 'Recent'}
+        log_file.write_text(
+            json.dumps(old) + '\n' + ('x' * (2 * 1024 * 1024)) + '\n' +
+            json.dumps(recent) + '\n',
+            encoding='utf-8',
+        )
+
+        with patch('core.hook_logger.get_hook_log_path', return_value=log_file):
+            logs = get_recent_hook_logs(limit=10)
+
+        assert [entry['hook_name'] for entry in logs] == ['Recent']
 
 
 class TestPercentile:

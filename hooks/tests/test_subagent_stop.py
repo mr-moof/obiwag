@@ -122,7 +122,7 @@ class TestAppendCompletion:
             "per_run": 0,
         }))
 
-        _append_completion(1, "DISCOVERY COMPLETE", "obi-discovery", "last_assistant_message")
+        assert _append_completion(1, "DISCOVERY COMPLETE", "obi-discovery", "last_assistant_message")
 
         data = json.loads(ds_path.read_text())
         assert len(data["completions"]) == 1
@@ -140,8 +140,8 @@ class TestAppendCompletion:
         ds_path = state_dir / "dispatch-state.json"
         ds_path.write_text(json.dumps({"schema_version": 1, "run_id": "r"}))
 
-        _append_completion(1, "DISCOVERY COMPLETE", "obi-discovery", "last_assistant_message")
-        _append_completion(2, "AUTHOR COMPLETE", "obi-author", "last_assistant_message")
+        assert _append_completion(1, "DISCOVERY COMPLETE", "obi-discovery", "last_assistant_message")
+        assert _append_completion(2, "AUTHOR COMPLETE", "obi-author", "last_assistant_message")
 
         data = json.loads(ds_path.read_text())
         assert len(data["completions"]) == 2
@@ -203,6 +203,21 @@ class TestAppendCompletion:
         assert data["per_phase"] == {"1_Discovery": 1}
         assert data["per_run"] == 2
         assert len(data["completions"]) == 1
+
+    def test_completion_history_is_bounded(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        state_dir = tmp_path / ".obi" / "state"
+        state_dir.mkdir(parents=True)
+        ds_path = state_dir / "dispatch-state.json"
+        ds_path.write_text(json.dumps({
+            "completions": [{"phase": 1, "signal": str(i)} for i in range(100)]
+        }))
+
+        assert _append_completion(2, "AUTHOR COMPLETE", "obi-author", "last_assistant_message")
+        data = json.loads(ds_path.read_text())
+        assert len(data["completions"]) == 100
+        assert data["completions"][-1]["signal"] == "AUTHOR COMPLETE"
+        assert not list(state_dir.glob("dispatch-state.json.*.tmp"))
 
 
 class TestAgentPhaseMap:

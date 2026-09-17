@@ -42,7 +42,16 @@ class DriftDetectorSessionStart:
 
         from core.drift_detector import detect_drift
 
-        drift = detect_drift()
+        deadline = None
+        if ctx.deadline_monotonic is not None:
+            deadline = max(0.0, ctx.deadline_monotonic - 0.25)
+        drift = (
+            detect_drift(deadline_monotonic=deadline)
+            if deadline is not None
+            else detect_drift()
+        )
+        if drift.get('timed_out'):
+            return "\n[Drift] Daily check deferred: SessionStart hook budget exhausted."
         total = drift.get('total_drifted', 0)
 
         # Save baseline for the session-end drift nag (Issue #138).

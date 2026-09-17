@@ -12,6 +12,7 @@ acceptable — the worst case is one missed nag.
 
 import json
 import os
+import time
 from typing import Optional, Tuple
 
 from core.paths import get_obi_root
@@ -51,7 +52,9 @@ def _load_baseline() -> Optional[int]:
     return None
 
 
-def compute_drift_delta() -> Tuple[Optional[int], Optional[int]]:
+def compute_drift_delta(
+    deadline_monotonic: Optional[float] = None,
+) -> Tuple[Optional[int], Optional[int]]:
     """Return (delta, current_total) for the end-of-session comparison.
 
     Returns ``(None, None)`` if the drift detector is unavailable or the
@@ -63,7 +66,16 @@ def compute_drift_delta() -> Tuple[Optional[int], Optional[int]]:
         return None, None
 
     try:
-        current = detect_drift().get("total_drifted", 0)
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            return None, None
+        drift = (
+            detect_drift(deadline_monotonic=deadline_monotonic)
+            if deadline_monotonic is not None
+            else detect_drift()
+        )
+        if drift.get("timed_out"):
+            return None, None
+        current = drift.get("total_drifted", 0)
     except Exception:
         return None, None
 

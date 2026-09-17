@@ -12,14 +12,9 @@ Define explicit rules for when to loop back, escalate, or hard stop during workf
 Issue Detected
      │
      ▼
-Is issue fixable? ─────No─────► NEEDS USER INPUT
+Is issue fixable in scope? ───No────► Named safety/source/authority boundary
      │
     Yes
-     │
-     ▼
-How many issues? ─────>5─────► NEEDS USER INPUT (too many)
-     │
-    ≤5
      │
      ▼
 Same issue failed before? ───Yes───► Check strike count
@@ -31,15 +26,14 @@ Same issue failed before? ───Yes───► Check strike count
      │                    │               │               │
      │                   1st             2nd             3rd
      │                    │               │               │
-     │                Loop back    Strike #2 Checkpoint  3-STRIKE LIMIT
+     │                Loop back    Diagnose + new path   3-STRIKE LIMIT
      │                    │               │               │
      ▼                    ▼               ▼               ▼
-Loop back ◄────────────── │ ◄─(if user says proceed)     STOP
+Loop back ◄────────────── │ ◄──────────── │      Stop identical approach
      │                                                    │
-     │                                               Diagnose
-     │                                               New approach
+     │                                      Different bounded recovery exists?
      ▼                                                    │
-Fix issue ◄───────────────────────────────────────────────┘
+Fix issue ◄──────────────────────────────────────Yes──────┘
      │
      ▼
 Continue phase
@@ -51,8 +45,8 @@ Continue phase
 
 | Metric | Limit | Action When Exceeded |
 |--------|-------|---------------------|
-| Loops per phase | 3 | `NEEDS USER INPUT: Max loops exceeded` |
-| Total workflow loops | 10 | `NEEDS USER INPUT: Workflow loop limit` |
+| Loops per phase | 3 | Diagnose and select a materially different bounded recovery; record it |
+| Total workflow loops | 10 | Primary reconciliation; terminal only for a named non-bypassable boundary |
 | Consecutive same-error | 3 | `3-STRIKE LIMIT` |
 
 ### Counter Tracking
@@ -78,7 +72,6 @@ Counters are tracked inside the strike state file (`.obi/strike-state.json`) by 
 
 **Loop back when:**
 - Issue is clear and fixable
-- Number of issues ≤ 5
 - Haven't exceeded loop limits
 - Test failures with clear error messages
 - Linting errors with specific file:line
@@ -87,27 +80,19 @@ Counters are tracked inside the strike state file (`.obi/strike-state.json`) by 
 
 ## When to Escalate
 
-**Escalate to `NEEDS USER INPUT` when:**
-- More than 5 issues detected
-- Issue cause is unclear
-- Fix requires design decision
-- External dependency problems
-- Ambiguous requirements
-- Max loop count exceeded
+Issue count, retry exhaustion, unclear worker output, and a fixable test/build failure are not
+authority boundaries in `obi-auto` or `obi-auto-max`. Record the exact evidence in
+`.obi/state/status-updates-<run_id>.jsonl`, select the conservative reversible recovery, and
+continue. Manual `obi` may still ask for prioritization or a product choice.
 
-**Escalate signal:**
-```
-NEEDS USER INPUT: [specific question or context needed]
-```
+Autonomous execution stops only for an explicit user abort or a named non-bypassable boundary:
+missing authoritative source, unavailable required credential, unauthorized external write,
+destructive/irreversible out-of-scope action, `HARD STOP`, or a risk of data corruption/exposure.
+State the exact missing evidence or authority; never ask the generic question "should I proceed?".
 
-**Examples:**
-- `NEEDS USER INPUT: Should this function return null or throw for invalid input?`
-- `NEEDS USER INPUT: Can't determine correct API endpoint - vendor docs show two options`
-- `NEEDS USER INPUT: 6 review issues found - prioritization needed`
+## When to Stop an Approach
 
-## When to Hard Stop
-
-**Hard stop with `3-STRIKE LIMIT` when:**
+**Emit `3-STRIKE LIMIT` and stop the current approach when:**
 - Same issue (same signature) failed 3 consecutive times
 - Each attempt used a different approach
 - No progress despite variations
@@ -123,6 +108,11 @@ Previous attempts:
 
 Recommendation: [Diagnose root cause / Find example / Skip for now]
 ```
+
+In manual mode this may require a product decision. In autonomous mode, the signal is a diagnostic
+checkpoint: append `phase_blocker_fixable` or `check_failure_fixable`, select a materially different
+safe route, and continue. Retry exhaustion becomes terminal only when the diagnosis identifies a
+separate non-bypassable boundary from the list above.
 
 ## Strike Counter Behavior
 
@@ -150,7 +140,7 @@ Signatures should be specific enough to identify the issue but general enough to
 **Good signatures:**
 - `linting:config_not_found`
 - `test:assertion_failed:TestUserAuth`
-- `api:cloud:401_unauthorized`
+- `api:widgetapi:401_unauthorized`
 - `build:dependency_missing:lodash`
 
 **Bad signatures (too vague):**
@@ -160,7 +150,9 @@ Signatures should be specific enough to identify the issue but general enough to
 
 ### Checkpoint at Strike #2
 
-At strike #2, pause and present options:
+At strike #2, diagnose before another attempt. In manual mode, present options. In autonomous mode,
+append the diagnosis and selected materially different bounded path, then continue without a
+permission question:
 
 ```markdown
 ## ⚠️ Strike #2 Checkpoint
@@ -179,15 +171,15 @@ This issue has failed **twice** in a row. Before attempting a third fix, let's p
 3. **Find examples** - Search repo for working examples
 4. **Skip this fix** - Move on, address separately
 
-Should I proceed with Strike #3, or would you like to provide input first?
+Manual mode only: choose the next approach or provide missing product input.
 ```
 
 ## Phase-Specific Rules
 
-| Phase | Loop Trigger | Escalate Trigger | Hard Stop Trigger |
+| Phase | Loop Trigger | Escalate Trigger | Approach Stop Trigger |
 |-------|--------------|------------------|-------------------|
-| 2. Author | Test fail, lint error | Build fails, unclear requirements | Same test fails 3x |
-| 4. Review | <5 issues found | >5 issues, unclear violations | - |
+| 2. Author | Test fail, lint error | Missing product/source boundary | Same test fails 3x |
+| 4. Review | Reproduced issue found | Missing source or unsafe scope | Reproduced hard-stop violation (terminal) |
 | 5. Integrate | Failed fix | Fix introduces new issues | Same issue 3x |
 | 6. Re-review | Regression found | New pattern violations | - |
 
@@ -197,7 +189,7 @@ Should I proceed with Strike #3, or would you like to provide input first?
 
 The strike counter resets when:
 - Issue is successfully resolved
-- New approach is explicitly adopted (with the user confirmation)
+- A genuinely different approach is explicitly adopted (manual confirmation or autonomous ledger record)
 - Different issue type occurs
 - Workflow restarts
 
@@ -213,10 +205,12 @@ Loop counters reset when:
 In `/obi-auto` (Ralph loop):
 
 1. **Before each fix attempt:** Check strike count
-2. **At strike #2:** Pause, present checkpoint, wait for input
-3. **At strike #3 failure:** Output `3-STRIKE LIMIT`, halt loop
-4. **On escalation:** Output `NEEDS USER INPUT`, halt loop
-5. **On success:** Reset strike counter, continue
+2. **At strike #2:** Diagnose and record a materially different bounded approach; continue
+3. **At strike #3 failure:** Output `3-STRIKE LIMIT`; stop the identical approach and use a safe
+   codified recovery/primary route when one exists
+4. **On recoverable escalation:** Append the autonomous decision, execute its ordered actions, and continue
+5. **On a non-bypassable boundary:** Append terminal evidence and halt
+6. **On success:** Reset strike counter, continue
 
 ## Counters API (for hooks)
 
@@ -274,14 +268,17 @@ or errored, or the `Agent` fallback returned a sentinel without agent output).
 ### Lifecycle rules
 
 1. **Autonomous run start.** Orchestrator reads `.obi/state/run-id.txt` (or creates it for a fresh
-   run; the user is consulted if a stale run-id from a halted prior run exists). Compares
-   `dispatch-state.json.run_id` against `run-id.txt`. If mismatch or file absent, overwrites with a
-   fresh `{schema_version: 1, run_id: <id>, per_phase: {}, per_run: 0}`.
+   run). It validates existing ownership and state: resume an internally consistent resumable run,
+   or manifest-archive terminal/safely recognizable state and start fresh. Unknown ownership or an
+   unverifiable live writer is a data-integrity hard stop. No stale-state continuation question.
+   `dispatch-state.json.run_id` must match `run-id.txt`; mismatch is classified before replacement.
 2. **Manual `/obi` mode.** Same run-id rule (read existing or create on demand). No automatic
    dispatch-state reset; the user is the loop. `/obi` prints `per_run` counter on startup so the
    user can `Remove-Item .obi/state/dispatch-state.json` if desired.
-3. **End-of-run.** On successful Learning phase completion, delete BOTH `dispatch-state.json` AND
-   `run-id.txt`. On halt/failure, both remain in place so the next run can offer resume semantics.
+3. **End-of-run.** On successful Learning phase completion, use
+   `tools/archive-run-state.ps1 -RunId <active>` and require its complete manifest. Never delete
+   `dispatch-state.json`, `run-id.txt`, or completion markers by hand. On halt/failure, state remains
+   so the next run can validate recovery semantics.
 4. **`run_id` format.** `yyyyMMddTHHmmssZ` (filename-safe compact UTC). NOT ISO `o` format because
    colons are invalid in Windows filenames and `run_id` appears in artifact paths like
    `.obi/reviews/<run_id>-rereview.md`.
@@ -292,16 +289,20 @@ or errored, or the `Agent` fallback returned a sentinel without agent output).
 - 3 retries per run total
 
 Reaching either limit transitions to inline fallback (for inline-fallback-eligible phases per
-`phases/phase-table.json`) or `NEEDS USER INPUT` halt (for synthesis phases). See
-`orchestration/obi-auto.md` Phase-Output Validation for the full contract.
+`phases/phase-table.json`) or bounded primary takeover after verified worker termination. It never
+becomes a permission-only halt. See `orchestration/obi-auto.md` Phase-Output Validation.
 
-### Files this PR formalizes under `.obi/state/`
+### Files this MR formalizes under `.obi/state/`
 
 NEW (introduced by Issue #163):
 - `.obi/state/run-id.txt` — filename-safe compact UTC run id, single line.
 - `.obi/state/dispatch-state.json` — retry-tracking schema above.
 
-Pre-existing files (listed for healthcheck completeness; not introduced or modified by this PR):
+Autonomous recovery ledger:
+- `.obi/state/status-updates-<run_id>.jsonl` — append-only evidence, decision, provenance,
+  disposition, ordered action, and concise progress records.
+
+Pre-existing files (listed for healthcheck completeness; not introduced or modified by this MR):
 - `.obi/state/phase-0-prereqs.json` — written by rigor=max Phase 0 (see
   `orchestration/obi-auto.md`).
 

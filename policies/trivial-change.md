@@ -1,6 +1,6 @@
 # Trivial Change Policy
 
-> **Version:** 1.1 | **Last Updated:** 2026-06-18 (OPT-18 lane-first)
+> **Version:** 1.1 | **Last Updated:** 2026-06-18
 
 ## Purpose
 
@@ -25,7 +25,7 @@ second, semantic, criterion):
 
 ## What Gets Skipped
 
-Lane-first (OPT-18): the `trivial` lane in `phases/phase-table.json` declares the TOTAL phase list
+The `trivial` lane in `phases/phase-table.json` declares the TOTAL phase list
 `[2, 9]` — **only Author (2) and Release Gate (9) run**; every other phase is absent. The `lanes`
 structure is the canonical source; this policy holds only the threshold + the "what does NOT
 qualify" exclusions that classify a change INTO the trivial lane.

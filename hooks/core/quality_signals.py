@@ -76,15 +76,42 @@ def find_file_thrashing(tools: list, threshold: int = 3) -> Dict[str, int]:
     return {p: c for p, c in read_counts.items() if c >= threshold}
 
 
-def check_file_size(file_path: str, threshold: int = 400) -> int | None:
+def check_file_size(
+    file_path: str,
+    threshold: int = 400,
+    *,
+    max_lines: int = 5000,
+    max_bytes: int = 2 * 1024 * 1024,
+) -> int | None:
     """Check if a file exceeds the line count threshold.
 
     Returns the line count if it exceeds threshold, else None.
-    Returns None for missing, unreadable, or binary files.
+    Returns None for missing, unreadable, binary, or pathologically large
+    single-line files. Counting stops after ``max_lines`` and returns
+    ``max_lines + 1``; reads stop after ``max_bytes`` unless the threshold has
+    already been proven. This keeps a 3-second PostToolUse hook from scanning a
+    generated multi-gigabyte artifact merely to print an exact count.
     """
     try:
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-            count = sum(1 for _ in f)
+        count = 0
+        consumed = 0
+        last_byte = b''
+        with open(file_path, 'rb') as f:
+            while True:
+                chunk = f.read(64 * 1024)
+                if not chunk:
+                    break
+                if consumed == 0 and b'\0' in chunk[:8192]:
+                    return None
+                consumed += len(chunk)
+                count += chunk.count(b'\n')
+                last_byte = chunk[-1:]
+                if count > max_lines:
+                    return max_lines + 1
+                if consumed >= max_bytes:
+                    return None
+        if consumed and last_byte != b'\n':
+            count += 1
         return count if count > threshold else None
     except (FileNotFoundError, PermissionError, OSError):
         return None
@@ -123,7 +150,7 @@ def write_quality_signals_jsonl(
 
     Uses rotation from hook_logger to keep file under 500KB.
     """
-    from core.hook_logger import _rotate_log_if_needed
+    from core.hook_logger import append_rotating_jsonl
 
     obi_dir = get_obi_root() / '.obi'
     obi_dir.mkdir(parents=True, exist_ok=True)
@@ -144,8 +171,6 @@ def write_quality_signals_jsonl(
     }
 
     try:
-        from core.jsonl_helper import append_jsonl
-        append_jsonl(log_path, entry)
-        _rotate_log_if_needed(log_path, max_size_bytes=500_000)
+        append_rotating_jsonl(log_path, entry, max_size_bytes=500_000)
     except Exception as exc:
         log_swallowed("quality_signal_write", exc)

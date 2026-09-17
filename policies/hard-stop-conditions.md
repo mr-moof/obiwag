@@ -60,22 +60,22 @@ Define conditions that trigger immediate workflow halt. No exceptions, no workar
 
 **Resolution:**
 1. Present what will be deleted/overwritten
-2. Wait for the user confirmation
-3. Only proceed with explicit approval
+2. Append `hard_stop` with that evidence via `autonomous_recovery.py` and halt — this boundary is
+   not bypassable by an autonomous default
+3. Only proceed after explicit the user approval
 
-### 6. Codex FAIL Verdict Ignored
+### 6. Reproduced Peer Finding Ignored
 
-**Trigger:** Codex (Recipe 1, 2, or 3 per `policies/codex-usage.md`) ran to completion and returned a FAIL verdict, critical findings, or hallucinated-API flag, and the author/orchestrator proceeded without addressing every finding.
+**Trigger:** The bounded peer harness returned a mechanically accepted finding, the primary reviewer reproduced that defect against the original working tree, and the author/orchestrator proceeded without fixing it or recording an evidence-backed rebuttal/override.
 
-**Signal:** `HARD STOP: Codex FAIL verdict ignored - pass <N>: <unaddressed-finding-summary>`
+**Signal:** `HARD STOP: Reproduced peer finding ignored - <provider>: <unaddressed-finding-summary>`
 
 **Resolution:**
-1. List every Codex finding that has NOT been addressed in the current diff or plan
+1. List every reproduced peer finding that has NOT been addressed in the current diff or plan
 2. For each: either fix the code/plan, OR provide explicit evidence the finding is a false positive (cite repo `file:line`, vendor doc committed in repo, or test output)
-3. If the user decides to override despite the finding: record the override in `.obi/state/codex-overrides.md` with rationale before resuming
-4. Multi-pass convergence (per memory `feedback_codex_multipass_converges_two_rounds`) targets a PASS verdict — accumulated FAILs across N passes do NOT become advisory by virtue of being repeated. "Codex passes 1 and 2 both FAILed; I proceeded anyway" is a §6 violation regardless of how confident the author feels about the inferred content.
+3. If the user decides to override despite the reproduced defect: record the override in `.obi/state/peer-review-overrides.md` with rationale before resuming
 
-**Why this exists:** `policies/codex-usage.md` non-goal "Codex unavailability is not a fatal gate" refers only to availability. A FAIL verdict is authoritative output from a successful run; ignoring it — especially when the author admits "inferred from pattern" or "best-effort synthesis" — is a zero-hallucination-policy violation (see `policies/zero-hallucination.md`). Canonical memories: `feedback_codex_fail_is_halt_not_proceed` (FAIL is halt, not "proceed cautiously") and `feedback_no_authoritative_docs_from_inferred_content` (domain-shaped synthesis — Application names, choice values, retry policies — is the worst hallucination class).
+**Why this exists:** `policies/peer-review.md` makes the peer verdict advisory because transport completion, schema validity, citation validity, and correctness are different facts. A raw peer FAIL is therefore not a hard stop. Once the primary reviewer independently reproduces a defect, however, proceeding without disposition violates the zero-hallucination policy. Rejected citations and unavailable/inconclusive runs can never trigger this condition.
 
 ## How to Report
 
@@ -103,13 +103,3 @@ After hard stop resolution:
 2. Document the resolution
 3. Resume from the halted phase
 4. Do not restart the entire workflow
-
-## Non-Negotiable
-
-Hard stops cannot be bypassed by:
-- "I'm confident it will work"
-- "The user asked for this"
-- "It's just a small change"
-- "I'll verify later"
-
-The only path forward is resolution through proper channels.

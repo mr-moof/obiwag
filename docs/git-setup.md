@@ -89,7 +89,7 @@ HTTPS password:
 ## Step 4: Clone a Repository
 
 ```powershell
-git clone https://github.com/user/obiwag-agents.git
+git clone https://github.com/mr-moof/obiwag.git
 ```
 
 If prompted for credentials, supply your GitHub username and either the token (Option B)

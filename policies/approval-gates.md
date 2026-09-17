@@ -29,10 +29,10 @@ The following classes of change MUST be confirmed with the user before they ship
   data removal from any persistence layer.
 - **Policy / workflow edits** — modifications to files under `policies/`,
   `orchestration/`, `phases/`, or the hook contract under `hooks/`.
-- **Memory-schema changes** — alterations to `auto-memory/memory-schema.md`
+- **Memory-schema changes** — alterations to the memory schema documented in `.obi/README.md`
   or the structural shape of files under `~/.claude/projects/<proj>/memory/`.
 - **New vendor integrations** — adding support for a new external API or
-  on-prem appliance (a cloud provider, a hypervisor, a ticketing system, etc.).
+  on-prem appliance (StorageAPI, WidgetAPI, CanvasAPI, etc.).
 - **Breaking changes** — any change that alters an existing public contract
   (slash command name/args, hook output schema, manifest format) such that
   prior consumers would need to update.
@@ -52,14 +52,16 @@ The following classes DO NOT require approval — proceed and report:
 
 ## When Uncertain
 
-- **First encounter with an ambiguity**: ask the user. The cost of one question
-  is much smaller than rework after the fact.
+- **First encounter with an ambiguity**: in manual `/obi`, ask the user — the cost of one question
+  is much smaller than rework after the fact. In `obi-auto`/`obi-auto-max`, the standing
+  autonomous-recovery contract applies instead: take the reversible in-scope default and append the
+  decision; only a named terminal boundary halts.
 - **Established pattern**: proceed. If you've already asked once for a class
   of change and the user's answer was "go", apply the same answer to comparable
   later instances.
 - **Multiple simultaneous changes**: split the work — the approval-gated
   changes go on a branch with a description, the autonomous ones land
-  directly on master.
+  directly on main.
 
 ## Why this is separate from hard-stop-conditions
 

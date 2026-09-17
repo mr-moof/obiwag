@@ -99,7 +99,7 @@ class TestGetSourceRepoPath:
         def _isdir(p):
             # Allow the env var check (tmp_path/hooks won't exist) but
             # block all hardcoded candidate checks.
-            if 'src' in str(p) or 'source' in str(p):
+            if 'source' in str(p) or 'source' in str(p):
                 return False
             return real_isdir(p)
 

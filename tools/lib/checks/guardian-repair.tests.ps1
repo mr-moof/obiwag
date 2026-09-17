@@ -1,21 +1,24 @@
 <#
 .SYNOPSIS
-    Pester 3.4 tests for tools/lib/checks/guardian-repair.ps1
+    Pester 5 tests for tools/lib/checks/guardian-repair.ps1
     (Repair-*, Save-ConfigSnapshot, Restore-FromSnapshot, New-RecoveryIssue,
      Enter-SafeMode, Exit-SafeMode functions).
 #>
 
 Describe 'Guardian Repair' {
 
-    $script:ToolsDir = Join-Path (Split-Path -Parent $PSScriptRoot) '..'
-    $script:ToolsDir = (Resolve-Path $script:ToolsDir).Path
-
-    $script:ManifestPath = Join-Path $script:ToolsDir 'lib\hook-manifest.json'
-    $script:Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-    $script:ManifestHookFiles = @($Manifest.hooks | ForEach-Object { $_.file })
-    $script:ManifestCoreModules = @($Manifest.core_modules)
-
     BeforeEach {
+        # These must be resolved here, not in the Describe body: code directly in a
+        # Describe runs during Pester 5's DISCOVERY pass, so the values are gone by
+        # the time this BeforeEach executes and Join-Path receives $null.
+        $script:ToolsDir = Join-Path (Split-Path -Parent $PSScriptRoot) '..'
+        $script:ToolsDir = (Resolve-Path $script:ToolsDir).Path
+
+        $script:ManifestPath = Join-Path $script:ToolsDir 'lib\hook-manifest.json'
+        $script:Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
+        $script:ManifestHookFiles = @($Manifest.hooks | ForEach-Object { $_.file })
+        $script:ManifestCoreModules = @($Manifest.core_modules)
+
         # Dot-source dependencies
         . (Join-Path $script:ToolsDir 'lib\common.ps1')
         . (Join-Path $script:ToolsDir 'lib\validation.ps1')
@@ -72,8 +75,12 @@ Describe 'Guardian Repair' {
 
         # Create core modules (from manifest)
         $ManifestCoreModules | ForEach-Object {
-            Set-Content (Join-Path $CoreDir $_) "# placeholder" -Encoding UTF8
-            Set-Content (Join-Path $SourceCoreDir $_) "# source repo copy" -Encoding UTF8
+            $installedPath = Join-Path $CoreDir $_
+            $sourcePath = Join-Path $SourceCoreDir $_
+            New-Item -ItemType Directory -Path (Split-Path -Parent $installedPath) -Force | Out-Null
+            New-Item -ItemType Directory -Path (Split-Path -Parent $sourcePath) -Force | Out-Null
+            Set-Content $installedPath "# placeholder" -Encoding UTF8
+            Set-Content $sourcePath "# source repo copy" -Encoding UTF8
         }
 
         $script:HookFiles = $ManifestHookFiles
@@ -94,7 +101,7 @@ Describe 'Guardian Repair' {
                 }
             }
 
-            ($missing -contains 'hook_wrapper.cmd') | Should Be $true
+            ($missing -contains 'hook_wrapper.cmd') | Should -Be $true
         }
 
         It 'Detects missing Python hook files' {
@@ -108,9 +115,9 @@ Describe 'Guardian Repair' {
                 }
             }
 
-            $missing.Count | Should Be 2
-            ($missing -contains 'session_start.py') | Should Be $true
-            ($missing -contains 'stop.py') | Should Be $true
+            $missing.Count | Should -Be 2
+            ($missing -contains 'session_start.py') | Should -Be $true
+            ($missing -contains 'stop.py') | Should -Be $true
         }
 
         It 'Detects missing core modules' {
@@ -124,9 +131,9 @@ Describe 'Guardian Repair' {
                 }
             }
 
-            $missingCore.Count | Should Be 2
-            ($missingCore -contains 'calibration.py') | Should Be $true
-            ($missingCore -contains 'hook_logger.py') | Should Be $true
+            $missingCore.Count | Should -Be 2
+            ($missingCore -contains 'calibration.py') | Should -Be $true
+            ($missingCore -contains 'hook_logger.py') | Should -Be $true
         }
 
         It 'Repairs by copying from source repo' {
@@ -137,9 +144,20 @@ Describe 'Guardian Repair' {
             Copy-Item (Join-Path $SourceHooksDir 'session_start.py') (Join-Path $HooksDir 'session_start.py') -Force
             Copy-Item (Join-Path $SourceCoreDir 'calibration.py') (Join-Path $CoreDir 'calibration.py') -Force
 
-            (Test-Path (Join-Path $HooksDir 'session_start.py')) | Should Be $true
-            (Test-Path (Join-Path $CoreDir 'calibration.py')) | Should Be $true
-            (Get-Content (Join-Path $HooksDir 'session_start.py')) | Should Be '# source repo copy'
+            (Test-Path (Join-Path $HooksDir 'session_start.py')) | Should -Be $true
+            (Test-Path (Join-Path $CoreDir 'calibration.py')) | Should -Be $true
+            (Get-Content (Join-Path $HooksDir 'session_start.py')) | Should -Be '# source repo copy'
+        }
+
+        It 'Repairs a nested core module into a missing parent directory' {
+            $module = 'detectors/peer_review_ownership_detector.py'
+            $installedDetectorDir = Join-Path $CoreDir 'detectors'
+            Remove-Item $installedDetectorDir -Recurse -Force
+
+            $repaired = @(Repair-MissingHooks -MissingFiles @() -MissingCoreModules @($module))
+
+            (Test-Path (Join-Path $CoreDir $module)) | Should -Be $true
+            $repaired | Should -Contain "core/$module"
         }
     }
 
@@ -162,8 +180,8 @@ Describe 'Guardian Repair' {
             $json = Get-Content $localPath -Raw | ConvertFrom-Json
             $polluted = @($json.permissions.allow | Where-Object { $_.Length -gt 200 })
 
-            $polluted.Count | Should Be 1
-            $polluted[0].Length | Should BeGreaterThan 200
+            $polluted.Count | Should -Be 1
+            $polluted[0].Length | Should -BeGreaterThan 200
         }
 
         It 'Removes polluted entries while keeping clean ones' {
@@ -189,10 +207,10 @@ Describe 'Guardian Repair' {
 
             # Verify
             $result = Get-Content $localPath -Raw | ConvertFrom-Json
-            $result.permissions.allow.Count | Should Be 3
-            ($result.permissions.allow -contains 'Read') | Should Be $true
-            ($result.permissions.allow -contains 'Write') | Should Be $true
-            ($result.permissions.allow -contains 'Glob') | Should Be $true
+            $result.permissions.allow.Count | Should -Be 3
+            ($result.permissions.allow -contains 'Read') | Should -Be $true
+            ($result.permissions.allow -contains 'Write') | Should -Be $true
+            ($result.permissions.allow -contains 'Glob') | Should -Be $true
         }
 
         It 'Handles completely unparseable JSON by deleting file' {
@@ -205,12 +223,12 @@ Describe 'Guardian Repair' {
             } catch {
                 $parseable = $false
             }
-            $parseable | Should Be $false
+            $parseable | Should -Be $false
 
             # Simulate repair: delete unparseable file
             Remove-Item $localPath -Force
 
-            (Test-Path $localPath) | Should Be $false
+            (Test-Path $localPath) | Should -Be $false
         }
 
         It 'Preserves settings.json during repair of settings.local.json' {
@@ -227,7 +245,7 @@ Describe 'Guardian Repair' {
 
             # settings.json should be untouched
             $settingsAfter = Get-Content $SettingsJson -Raw
-            $settingsAfter | Should Be $settingsBefore
+            $settingsAfter | Should -Be $settingsBefore
         }
     }
 
@@ -249,11 +267,11 @@ Describe 'Guardian Repair' {
             $snapshot | ConvertTo-Json -Depth 5 | Set-Content $snapshotFile -Encoding UTF8
 
             $loaded = Get-Content $snapshotFile -Raw | ConvertFrom-Json
-            $loaded.settings_json_valid | Should Be $true
-            $loaded.python_version | Should Be '3.14.2'
-            $loaded.obi_version | Should Be '0.56'
-            $loaded.hook_files.Count | Should Be 1
-            $loaded.hook_files[0].name | Should Be 'hook_wrapper.cmd'
+            $loaded.settings_json_valid | Should -Be $true
+            $loaded.python_version | Should -Be '3.14.2'
+            $loaded.obi_version | Should -Be '0.56'
+            $loaded.hook_files.Count | Should -Be 1
+            $loaded.hook_files[0].name | Should -Be 'hook_wrapper.cmd'
         }
 
         It 'Rotates snapshots keeping only 5' {
@@ -266,13 +284,13 @@ Describe 'Guardian Repair' {
                 @{ timestamp = $ts; settings_json_valid = $true } | ConvertTo-Json | Set-Content $file -Encoding UTF8
             }
 
-            (Get-ChildItem -Path $SnapshotDir -Filter 'snapshot-*.json').Count | Should Be 7
+            (Get-ChildItem -Path $SnapshotDir -Filter 'snapshot-*.json').Count | Should -Be 7
 
             # Simulate rotation
             $all = Get-ChildItem -Path $SnapshotDir -Filter 'snapshot-*.json' | Sort-Object Name -Descending
             $all | Select-Object -Skip 5 | ForEach-Object { Remove-Item $_.FullName -Force }
 
-            (Get-ChildItem -Path $SnapshotDir -Filter 'snapshot-*.json').Count | Should Be 5
+            (Get-ChildItem -Path $SnapshotDir -Filter 'snapshot-*.json').Count | Should -Be 5
         }
 
         It 'Identifies last known good snapshot for restore' {
@@ -297,8 +315,8 @@ Describe 'Guardian Repair' {
                 }
             }
 
-            $best | Should Not BeNullOrEmpty
-            $best.obi_version | Should Be '0.56'
+            $best | Should -Not -BeNullOrEmpty
+            $best.obi_version | Should -Be '0.56'
         }
     }
 
@@ -317,9 +335,9 @@ Describe 'Guardian Repair' {
             }
             $body = $bodyLines -join "`n"
 
-            $body | Should Match 'Restored hook_wrapper.cmd'
-            $body | Should Match 'Cleaned heredoc pollution'
-            $body | Should Match 'mod_a -> mod_b -> mod_a'
+            $body | Should -Match 'Restored hook_wrapper.cmd'
+            $body | Should -Match 'Cleaned heredoc pollution'
+            $body | Should -Match 'mod_a -> mod_b -> mod_a'
         }
 
         It 'Respects NoIssue flag by skipping creation' {
@@ -327,7 +345,7 @@ Describe 'Guardian Repair' {
             $allRepairs = @('some repair')
 
             $shouldCreate = (-not $NoIssue -and $allRepairs.Count -gt 0)
-            $shouldCreate | Should Be $false
+            $shouldCreate | Should -Be $false
         }
     }
 
@@ -335,7 +353,7 @@ Describe 'Guardian Repair' {
 
         It 'Disables hooks before repair' {
             $settings = Get-Content $SettingsJson -Raw | ConvertFrom-Json
-            $settings.hooks | Should Not BeNullOrEmpty
+            $settings.hooks | Should -Not -BeNullOrEmpty
 
             # Simulate entering safe mode
             $originalHooks = $settings.hooks
@@ -343,9 +361,9 @@ Describe 'Guardian Repair' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsJson -Encoding UTF8
 
             $modified = Get-Content $SettingsJson -Raw | ConvertFrom-Json
-            ($modified.hooks.PSObject.Properties | Measure-Object).Count | Should Be 0
+            ($modified.hooks.PSObject.Properties | Measure-Object).Count | Should -Be 0
 
-            $originalHooks | Should Not BeNullOrEmpty
+            $originalHooks | Should -Not -BeNullOrEmpty
         }
 
         It 'Re-enables hooks after repair' {
@@ -362,7 +380,7 @@ Describe 'Guardian Repair' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $SettingsJson -Encoding UTF8
 
             $restored = Get-Content $SettingsJson -Raw | ConvertFrom-Json
-            $restored.hooks.SessionStart | Should Not BeNullOrEmpty
+            $restored.hooks.SessionStart | Should -Not -BeNullOrEmpty
         }
 
         It 'Preserves original hook config exactly' {
@@ -386,7 +404,7 @@ Describe 'Guardian Repair' {
             $objAfter = $after | ConvertFrom-Json
 
             ($objAfter.hooks.SessionStart | ConvertTo-Json -Depth 10) |
-                Should Be ($objBefore.hooks.SessionStart | ConvertTo-Json -Depth 10)
+                Should -Be ($objBefore.hooks.SessionStart | ConvertTo-Json -Depth 10)
         }
     }
 }

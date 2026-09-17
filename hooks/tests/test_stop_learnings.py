@@ -132,7 +132,7 @@ class TestDetectAndPromptLearnings:
         """When learnings detected, should write pending-learnings.json."""
         fake_path = str(tmp_path / ".obi" / "pending-learnings.json")
         corrections = [{
-            "text": "The commit email must be your account email, not your personal one",
+            "text": "The email identity is incorrect",
             "pattern": "email",
             "confidence": 0.8,
         }]

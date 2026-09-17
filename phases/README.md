@@ -19,16 +19,16 @@ re-declaring per-phase routing.
 <!-- GENERATED FROM phases/phase-table.json BY tools/render-phase-table.ps1: DO NOT EDIT THIS TABLE BY HAND -->
 | # | Phase | Command | Agent | Default Strategy | Codified Recipe | Inline-Fallback Eligible? | Completion Signal | Lanes |
 |---|-------|---------|-------|------------------|-----------------|---------------------------|-------------------|:-----:|
-| 1 | **Discovery** | `/discovery` | `obi-discovery` (opus) | **dispatch** | — | no (synthesis — retry-or-halt) | `DISCOVERY COMPLETE` | E S M |
-| 2 | **Author** | `/author` | `obi-author` | **dispatch** | — | no (synthesis — retry-or-halt) | `AUTHOR COMPLETE` | T E S M |
-| 3 | **Simplify** | `/simplify` | `obi-simplify` (opus) | **inline (#164)** | **S** | **yes** | `SIMPLIFY COMPLETE` \| `SIMPLIFY SKIPPED` | E S M |
-| 4 | **Review** | `/review` | `obi-reviewer` (opus) | **inline (#164)** | **RV** | **yes** | `REVIEW COMPLETE: PASS` \| `REVIEW COMPLETE: FAIL [N] issues` | E S M |
-| 5 | **Integrate** | `/integrate` | `obi-integrator` | inline | — | n/a | `INTEGRATE COMPLETE` | E S M |
-| 6 | **Re-review** | `/re-review` | `obi-rereviewer` (opus) | **inline (#164)** | **R** | **yes** | `RE-REVIEW COMPLETE` (verdict in body) | S M |
-| 7 | **README** | `/readme` | `obi-readme` | inline | — | n/a | `README COMPLETE` \| `README SKIPPED` | E S M |
-| 8 | **README Review** | `/readme-review` | `obi-readme-verifier` (haiku) | **inline (#164)** | **M** | **yes** | `README REVIEW COMPLETE` (verdict in body) | S M |
-| 9 | **Release Gate** | `/release` | `obi-release-gate` | inline | **G** (codifies inline path) | n/a (already inline) | `RELEASE GATE PASSED` \| `RELEASE GATE FAILED: [reason]` | T E S M |
-| 10 | **Learning** | `/learning` | `obi-learner` | **dispatch** | — | no (synthesis) | `LEARNING CAPTURED` | E S M |
+| 1 | **Discovery** | `/discovery` | `obi-discovery` (fable) | **dispatch** | — | no (synthesis — bounded primary takeover) | `DISCOVERY COMPLETE` | E S M |
+| 2 | **Author** | `/author` | `obi-author` (fable) | **dispatch** | — | no (synthesis — bounded primary takeover) | `AUTHOR COMPLETE` | T E S M |
+| 3 | **Simplify** | `/simplify` | `obi-simplify` (sonnet) | **inline (#164)** | **S** | **yes** | `SIMPLIFY COMPLETE` \| `SIMPLIFY SKIPPED` | E S M |
+| 4 | **Review** | `/review` | `obi-reviewer` (sonnet) | **inline (#164)** | **RV** | **yes** | `REVIEW COMPLETE: PASS` \| `REVIEW COMPLETE: FAIL [N] issues` | E S M |
+| 5 | **Integrate** | `/integrate` | `obi-integrator` (sonnet) | inline | — | n/a | `INTEGRATE COMPLETE` \| `INTEGRATE NO-OP` | E S M |
+| 6 | **Re-review** | `/re-review` | `obi-rereviewer` (sonnet) | **inline (#164)** | **R** | **yes** | `RE-REVIEW COMPLETE` (verdict in body) | S M |
+| 7 | **README** | `/readme` | `obi-readme` (sonnet) | inline | — | n/a | `README COMPLETE` \| `README SKIPPED` | E S M |
+| 8 | **README Review** | `/readme-review` | `obi-readme-verifier` (sonnet) | **inline (#164)** | **M** | **yes** | `README REVIEW COMPLETE` (verdict in body) | S M |
+| 9 | **Release Gate** | `/release` | `obi-release-gate` (sonnet) | inline | **G** (codifies inline path) | n/a (already inline) | `RELEASE GATE PASSED` \| `RELEASE GATE FAILED: [reason]` | T E S M |
+| 10 | **Learning** | `/learning` | `obi-learner` (sonnet) | **dispatch** | — | no (synthesis — bounded primary takeover) | `LEARNING CAPTURED` \| `LEARNING SKIPPED` | E S M |
 <!-- obi:phase-table-end -->
 
 ## Delegation policy
@@ -74,38 +74,23 @@ list. `max` is assigned at invocation (`/obi-auto-max`); a phase absent from a l
 
 - After Integrate (5): an `express` lane reclassifies UP to `standard` if scope grew past 25 lines
   or added functional code (re-inserting Re-review). Reclassification only ever moves up.
+- Phase 5 may emit `INTEGRATE NO-OP: [reason]` only after its strict zero-finding/zero-change guard
+  is independently re-derived; this cascades to skip Phase 6. Missing evidence fails closed.
 - Phase 7 may emit `README SKIPPED` (content-based) → cascades to skip Phase 8.
 - Lane phase lists are canonical in `phase-table.json` → `lanes`; the **Lanes** column in the table
-  above shows which lanes include each phase.
+  above shows which lanes include each phase (T=trivial, E=express, S=standard, M=max).
+- Thresholds and exclusion rules: `docs/policies/express-lane.md`,
+  `docs/policies/trivial-change.md`. Operational detail: `orchestration/obi-auto.md` →
+  "Lane Detection".
 
 ## Break Signals
 
-These signals halt the workflow regardless of current phase:
-
-| Signal | Meaning | Action |
-|--------|---------|--------|
-| `NEEDS USER INPUT` | Missing information | Halt, ask the user, wait |
-| `HARD STOP: [reason]` | Policy violation | Immediate halt, report |
-| `3-STRIKE LIMIT` | Repeated failures | Stop fixing, diagnose |
-
-## Lanes (lane-first)
-
-Obi is **lane-first** (OPT-18): each lane declares the TOTAL ordered list of phases it runs,
-canonical in the `lanes` object of `phase-table.json`. The orchestrator classifies the lane once —
-after Author, via `tools/classify-lane.ps1` — and walks that list. The **Lanes** column in the
-phase table above shows which lanes include each phase (T=trivial, E=express, S=standard, M=max).
-
-| Lane | Phases | Trigger |
-|------|--------|---------|
-| `trivial`  | `[2, 9]` | ≤5 lines, comments/whitespace/typos only |
-| `express`  | `[1, 2, 3, 4, 5, 7, 9, 10]` | <25 lines of functional code (omits Re-review + README Review) |
-| `standard` | `[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]` | default |
-| `max`      | `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]` + Gates 2-5 | `rigor: max` |
-
-The lane reclassifies UP to `standard` if Integrate grows an `express` diff past 25 lines or adds
-functional code (re-inserting Re-review). A Phase-7 `README SKIPPED` cascades to skip README Review
-via the phase-7 `transitions` entry. See `docs/policies/express-lane.md`,
-`docs/policies/trivial-change.md`, and `orchestration/obi-auto.md` → "Lane Detection".
+`HARD STOP: [reason]`, an explicit user abort, and a genuinely missing product/authority input may
+halt the workflow. In autonomous mode, `NEEDS USER INPUT`, `NEEDS_CONTEXT`, `AUTHOR BLOCKED`, retry
+exhaustion, and `3-STRIKE LIMIT` are first classified by the standing recovery contract: a
+reversible in-scope blocker selects a different bounded repair or primary takeover and continues;
+only a named non-bypassable boundary becomes terminal. Meanings and required actions are in
+`orchestration/obi-auto.md`, which is the single signal contract.
 
 ## Directory Layout
 

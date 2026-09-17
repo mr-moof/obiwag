@@ -53,14 +53,7 @@ manifest = json.loads(manifest_path.read_text())['mappings']
 
 For each drifted file, look up `drift['relative']` in the manifest to get the source path, then copy deployed → source.
 
-If the manifest is missing (pre-v0.59 deployment), fall back to these known mappings:
-
-| Deployed (`~/.claude/`) | Source (`C:/src/obiwag-agents/`) |
-|-------------------------|------------------------------------|
-| `hooks/**` | `hooks/**` |
-| `docs/**` | `docs/**` |
-| `skills/**` | `skills/**` |
-| `settings.json` | `users/<USERNAME>/settings.json` |
+If the manifest is missing, stop and run `tools/deploy.ps1` first; do not guess mappings.
 
 ### 4. Verify
 

@@ -4,15 +4,21 @@
 
 ## Purpose
 
-Define how to resume workflow after break signals (`NEEDS USER INPUT`, `HARD STOP`, `3-STRIKE LIMIT`).
+Define how manual workflows resume after break signals and how autonomous workflows recover from
+reversible in-scope blockers without stopping for continuation permission.
 
 ## Break Signal Types
 
 | Signal | Cause | Resolution Required |
 |--------|-------|---------------------|
-| `NEEDS USER INPUT` | Missing information, ambiguous requirements | Clarification from the user |
+| `NEEDS USER INPUT` | Missing information, ambiguous requirements | Manual `/obi`: clarification from the user. Autonomous: classify first — recover in scope, or append the named terminal boundary and halt |
 | `HARD STOP: [reason]` | Policy violation, security concern | Root cause fix + approval |
 | `3-STRIKE LIMIT` | Same issue failed 3x | New approach or escalation |
+
+In `obi-auto` and `obi-auto-max`, the signal text is not itself authoritative. The orchestrator
+classifies its underlying evidence first. Retry exhaustion, worker failure, stale state, peer
+unavailability, and fixable phase/check failures use the standing autonomous recovery contract;
+only a named non-bypassable boundary remains a break.
 
 ## State Preservation
 
@@ -21,9 +27,11 @@ Break signals preserve state in `.obi/state/`:
 ```
 .obi/
 ├── state/
-│   ├── phase-current.json      # Current phase info
+│   ├── dispatch-state.json     # Current phase + recorded completion signals
 │   ├── phase-N-<name>.json     # Each phase's output
-│   └── break-context.json      # Break signal context
+│   ├── native-phase-<run>-<N>.json # Authoritative Codex-native timeline
+│   ├── status-updates-<run>.jsonl  # Append-only recovery evidence and decisions
+│   └── task-base-<run>.txt     # Task base commit for the run
 └── strike-state.json           # Strike counter state (in project CWD)
 ```
 
@@ -47,18 +55,41 @@ whether the SubagentStop hook already recorded the phase's completion signal:
 This pre-check prevents re-doing a 5-10 minute synthesis phase when the only failure was the
 dispatch IPC dropping the result.
 
+### Provider-specific delegated resume
+
+- **Claude supervisor:** read the unscoped current status, then retain the immutable path named by
+  `attempt_status_file` before resuming. Attempt 2 must use the same assigned Claude session and
+  writes `-a2`; never infer a two-attempt predicate from a current file that attempt 2 replaced.
+- **Codex native thread:** use the phase's `delegation_policy.codex` and update the run-scoped
+  record through `tools/native_phase_state.py`. Never steer before `synthesis_due_at_utc`; send the
+  exact no-tools synthesis instruction and record every later worker message/tool completion. After
+  the configured grace, interrupt and reconcile the worktree, then resume that same thread exactly
+  once for the configured two bounded windows. Recent progress yields
+  `productive_budget_exhausted`, not stalled. Only a full resumed bound with no observable progress
+  becomes `native_completion_stalled`; never launch a replacement. This is not `timed_out` and
+  cannot satisfy Claude capacity-mismatch evidence. In `obi-auto`/`obi-auto-max`, the validated
+  stall activates scoped standing primary-takeover authority without another permission prompt.
+  Invoke `tools/autonomous_recovery.py native_completion_stalled` with that timeline first; its
+  ordered actions are status append, primary takeover, and continued dispatch.
+
 ### After NEEDS USER INPUT
 
-1. **Read break context**: Check `.obi/state/break-context.json` for what was asked
-2. **Get the user's response**: the user provides the missing information
-3. **Resume same phase**: Continue from the phase where break occurred
-4. **No phase restart**: Use existing phase state, don't re-run from scratch
+In manual `obi`, read the last appended entry in `.obi/state/status-updates-<run>.jsonl`, obtain the
+missing material input, and resume the same phase. In `obi-auto`/`obi-auto-max`, first classify the
+reason:
 
-**Example flow:**
+1. Reversible, conservative, in-scope choice → append the decision and continue.
+2. Fixable blocker/check failure → primary repair or takeover, rerun the bounded phase/check, continue.
+3. Missing authoritative source, required credential, external-write authority, or safety boundary
+   → append terminal evidence and halt with that exact reason.
+
+Never ask merely to authorize retry, fallback, takeover, state recovery, or continued verification.
+
+**Example flow (autonomous):**
 ```
-Phase 3 (Simplify) → NEEDS USER INPUT: "Should I remove this legacy function?"
-                   → the user: "Yes, remove it"
-                   → Continue Phase 3 with decision
+Phase 3 (Simplify) → "Should I remove this legacy function?"
+                   → Reversible + in scope: keep it, append reversible_default_selected
+                   → Continue Phase 3 with the decision recorded
                    → SIMPLIFY COMPLETE
 ```
 
@@ -84,7 +115,7 @@ Phase 2 (Author) → HARD STOP: Security - credentials in code
 2. **Diagnose root cause**: Identify why 3 attempts failed
 3. **Choose resolution**:
    - **New approach**: Different strategy, reset strike counter
-   - **Skip for now**: Mark as technical debt, continue workflow
+   - **Defer only if allowed by acceptance criteria**: Record the omission and evidence
    - **Escalate**: Seek external help (team, documentation)
 4. **Resume with chosen approach**
 
@@ -102,45 +133,50 @@ Phase 4 (Review) → 3-STRIKE LIMIT: Linting config not found
 
 | Phase | After Break | Resume Behavior |
 |-------|-------------|-----------------|
-| All | Stall interrupt | Run the Pre-check (completions record) above first; advance if signal+artifact present |
-| 1. Discovery | NEEDS USER INPUT | Continue discovery with new info |
-| 2. Author | Any | Re-run from last successful edit |
-| 3. Simplify | NEEDS USER INPUT | Apply decision, continue cleanup |
-| 4. Review | 3-STRIKE | Skip failing check, document as known issue |
-| 5. Integrate | Any | Re-apply fixes from last known good state |
-| 6-10 | Any | Continue from phase start |
+| All | Stall interrupt | Run the completion pre-check; if incomplete, bounded same-worker recovery then recipe/primary takeover |
+| 1. Discovery | Fixable context/blocker | Synthesize settled evidence under primary provenance; no new research after the bound |
+| 2. Author | Fixable context/blocker | Reconcile claims with worktree, primary takeover from last verified edit |
+| 3. Simplify | Recoverable blocker | Select conservative in-scope cleanup or skip; record decision |
+| 4. Review | Peer unavailable | Send nothing, run local primary review once, continue |
+| 5. Integrate | Fixable finding | Re-apply from last known good state and rerun focused evidence |
+| 6-10 | Fixable blocker/check | Use codified recipe or bounded primary takeover; preserve phase-specific evidence |
 
 ## Commands for Resume
 
 ### Check current state
 ```bash
-# View current phase
-cat .obi/state/phase-current.json
+# View current phase and recorded completion signals
+cat .obi/state/dispatch-state.json
 
-# View break context
-cat .obi/state/break-context.json
+# View recovery decisions for the run
+cat .obi/state/status-updates-<run>.jsonl
 
 # View strike history
 cat .obi/strike-state.json
 ```
 
-### Reset state (if needed)
-```bash
-# Reset strike counter only
-rm .obi/strike-state.json
+### Archive state for a fresh run
 
-# Full state reset (restart workflow)
-rm -rf .obi/state/
+Never delete state by hand. Validate the active RunId, then use the move-only helper and require a
+complete manifest:
+
+```powershell
+powershell -NoProfile -File $env:OBI_HOME\tools\archive-run-state.ps1 -RunId <active-run-id>
 ```
+
+At autonomous startup, resume internally consistent state. For terminal/safely recognizable state,
+record `prior_run_terminal_or_corrupt`, archive it, and mint a fresh RunId. Unknown ownership,
+unsafe paths, collisions, or an unverifiable live writer are data-integrity hard stops.
 
 ## Autonomous Mode (Ralph Loop)
 
 When running `/obi-auto`:
 
-1. **Break signals halt the loop** - Ralph stops, presents context
-2. **the user provides input** - Response captured
-3. **Loop resumes** - From same phase, with new context
-4. **No manual phase invocation** - Ralph handles continuation
+1. **Classify the evidence** — signal wording alone does not decide disposition
+2. **Append the decision** — use `.obi/state/status-updates-<run>.jsonl`
+3. **Execute ordered recovery** — retry/recipe/primary takeover/state archive as selected
+4. **Emit one informational update** — never a continuation question
+5. **Continue from the same phase** — halt only for a named non-bypassable boundary
 
 ## Manual Mode (`/obi`)
 
@@ -167,15 +203,15 @@ Break signals are logged for learning:
 ```yaml
 # In session summary
 breaks:
-  - signal: NEEDS USER INPUT
+  - signal: reversible_default_selected
     phase: 3
     context: "Legacy function removal decision"
-    resolution: "Confirmed removal"
-    time_to_resolve: 2m
+    resolution: "Kept the function; recorded the reversible default"
+    time_to_resolve: 0m
 ```
 
 This helps calibrate:
-- Which phases need better pre-work (fewer NEEDS USER INPUT)
+- Which phases need better pre-work (fewer classify-and-recover detours)
 - Which issues are common (for proactive handling)
 - Resolution patterns (for future automation)
 

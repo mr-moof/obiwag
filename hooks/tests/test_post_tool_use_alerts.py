@@ -10,7 +10,7 @@ import pytest
 HOOKS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
 
-from post_tool_use import compute_in_session_alerts
+from post_tool_use import _append_tool_event, compute_in_session_alerts
 
 
 class TestEditWithoutReadAlert:
@@ -102,9 +102,9 @@ class TestFileSizeAlert:
         try:
             tools = [{"tool": "Read", "path": path, "timestamp": "1"}]
             alerts = compute_in_session_alerts(tools, "Read", path)
-            size_alerts = [a for a in alerts if "lines" in a and "threshold" in a]
+            size_alerts = [a for a in alerts if "line" in a and "threshold" in a]
             assert len(size_alerts) == 1
-            assert "450" in size_alerts[0]
+            assert "400-line threshold" in size_alerts[0]
         finally:
             Path(path).unlink(missing_ok=True)
 
@@ -148,8 +148,7 @@ class TestFileSizeRedAlert:
             red_alerts = [a for a in alerts if "[Quality RED]" in a]
             yellow_alerts = [a for a in alerts if a.startswith("[Quality]") and "threshold" in a]
             assert len(red_alerts) == 1
-            assert "650" in red_alerts[0]
-            assert "hard limit" in red_alerts[0]
+            assert "600-line ceiling" in red_alerts[0]
             assert len(yellow_alerts) == 0
         finally:
             Path(path).unlink(missing_ok=True)
@@ -184,8 +183,33 @@ class TestFileSizeIgnoreGlobs:
             alerts = post_tool_use.compute_in_session_alerts(
                 tools, "Read", str(path)
             )
-            size_alerts = [a for a in alerts if "threshold" in a or "hard limit" in a]
+            size_alerts = [a for a in alerts if "threshold" in a or "ceiling" in a]
             assert len(size_alerts) == 0
+
+    def test_generated_stdout_artifact_suppresses_source_size_policy(self):
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.out', delete=False, encoding='utf-8'
+        ) as f:
+            for i in range(700):
+                f.write(f"line {i}\n")
+            path = f.name
+        try:
+            alerts = compute_in_session_alerts(
+                [{"tool": "Read", "path": path, "timestamp": "1"}],
+                "Read",
+                path,
+            )
+            assert not [a for a in alerts if "line" in a.lower()]
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+
+def test_tool_history_is_a_bounded_rolling_window():
+    history = []
+    for index in range(1005):
+        history = _append_tool_event(history, {'tool': 'Read', 'path': str(index)})
+    assert len(history) == 1000
+    assert history[0]['path'] == '5'
 
 
 class TestNoPathNoAlerts:

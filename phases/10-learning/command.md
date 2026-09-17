@@ -1,5 +1,7 @@
 ---
 description: Capture session learnings for future improvement. Document patterns, pitfalls, and corrections.
+model: sonnet
+effort: medium
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Skill
 ---
 
@@ -19,11 +21,17 @@ Capture learnings from the session for future improvement. Document new patterns
 
 ## Process
 
-### 0. Run Memory Review (MANDATORY)
+### 0. Run Memory Review
 
-**Always invoke `/obi-memory-review` before manual analysis.** This is not optional — it processes pending learnings, pending evolutions, and memory health checks. Do not skip this step even if you believe there are no learnings to review.
+Before dispatch, the primary runs `tools/efficiency.py learning` using the complete eligibility
+evidence in `docs/agent-efficiency.md`. A verified empty, healthy result emits
+`LEARNING SKIPPED: no actionable work` without launching this phase. Unavailable evidence,
+pending queues, corrections, reusable discoveries, unresolved failures, or due health work
+requires dispatch. Never infer empty queues from silence in the transcript.
 
-After `/obi-memory-review` completes, proceed to manual analysis for anything it didn't cover.
+When this phase is dispatched, run `/obi-memory-review` first. It processes pending learnings,
+pending evolutions, and memory health checks. Then cover anything it did not. Runtime-specific
+authority still applies: do not write permanent user memory without authorization.
 
 ### 1. Analyze Session
 Focus on learnings NOT already captured in `pending-learnings.json`. Review the session for:
@@ -34,7 +42,7 @@ Focus on learnings NOT already captured in `pending-learnings.json`. Review the 
 
 ### 1b. Quality Signal Review
 
-Read `.obi/session-quality.jsonl` (last 10 entries). If a signal appears in 3+ of the last 10 sessions, note the pattern. Do not propose fixes — report the observation and let the user decide. Example: "edit-without-read appeared in 4 of last 10 sessions, all in cloud task type."
+Read `.obi/session-quality.jsonl` (last 10 entries). If a signal appears in 3+ of the last 10 sessions, note the pattern. Do not propose fixes — report the observation and let the user decide. Example: "edit-without-read appeared in 4 of last 10 sessions, all in widgetapi task type."
 
 ### 2. Identify Learnings
 Categories:
@@ -96,13 +104,8 @@ If workflow improvements identified:
 
 ## Completion
 
-On entry, emit the progress bar with Learning active:
-```
-[10/10] ● Disc ━ ● Auth ━ ● Simp ━ ● Rev ━ ● Intg ━ ● ReRv ━ ● Read ━ ● RdRv ━ ● Rel ━ ◐ Lrn
-```
-
 - **Learnings captured:** Output `LEARNING CAPTURED`
-- **No learnings:** Output `LEARNING CAPTURED` (empty session is valid)
+- **Dispatched review found no new entries:** Output `LEARNING CAPTURED` and record that outcome
 
 ## Notes
 

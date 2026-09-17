@@ -13,7 +13,7 @@
       lib/validation.ps1                 -> Core structural checks (CG-1..CG-6)
       lib/checks/check-quick.ps1         -> Quick env/CLI checks (VS-1..VS-11)
       lib/checks/check-auto-max.ps1      -> auto-max.yaml validation (AM-2..AM-5)
-      lib/checks/check-dispatch-docs.ps1 -> phase-table + README sync (DD-1..DD-2)
+      lib/checks/check-dispatch-docs.ps1 -> phase-table + README sync + catch-log wiring (DD-1..DD-3)
       lib/checks/guardian-diagnostics.ps1-> Circular deps + backup health (CG-4, CG-7)
       lib/checks/guardian-repair.ps1     -> Repair + snapshot + safe-mode (CG-8..CG-14)
 
@@ -40,8 +40,14 @@
     Skip GitHub issue creation on recovery.
 
 .PARAMETER RepoRoot
-    Override auto-detected repo root. Used when running from a staged location
-    (e.g., C:\src) where the script's parent directory is not the repo.
+    Override auto-detected repo root. Auto-detection prefers the git top-level of
+    the CURRENT WORKING DIRECTORY, falling back to the script's parent directory.
+
+    The cwd-first default matters: CLAUDE.md documents invoking the DEPLOYED copy
+    as $env:OBI_HOME\tools\config-guardian.ps1, and inferring the root from the
+    script's own location made that resolve to obi-tools — so source-tree checks
+    (phases/README.md, catch-log wiring) reported spurious FAILs for paths that
+    were never missing, just looked for in the wrong repo.
 
 .EXAMPLE
     .\tools\config-guardian.ps1
@@ -75,7 +81,16 @@ $ErrorActionPreference = 'Stop'
 
 $script:ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $RepoRoot) {
-    $script:RepoRoot = Split-Path -Parent $ScriptDir
+    # Prefer the git top-level of the cwd: CLAUDE.md documents running the
+    # DEPLOYED copy from $env:OBI_HOME, so $ScriptDir's parent is obi-tools, not
+    # the repo being validated. Fall back to the old behavior when the cwd is not
+    # a git work tree (e.g. a staged location).
+    $gitTop = & git rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -eq 0 -and $gitTop) {
+        $script:RepoRoot = ($gitTop | Select-Object -First 1).Trim() -replace '/', '\'
+    } else {
+        $script:RepoRoot = Split-Path -Parent $ScriptDir
+    }
 } else {
     $script:RepoRoot = $RepoRoot
 }
@@ -122,12 +137,20 @@ $settingsResult    = Test-SettingsJson
 $heredocResult     = Test-HeredocPollution
 $hookPathResult    = Test-HookPaths
 $sharedPermsResult = Test-SharedPermissions
+# Check BOTH the deployed settings AND the source-of-truth (users/<user>/settings.json) so a
+# path-qualified Write() rule is caught BEFORE it deploys (issue #200 SS5). Missing paths are
+# skipped, so this is safe whether config-guardian runs from source or from the deployed copy.
+$permRulesResult   = Test-PermissionRules -SettingsPaths @(
+    $SettingsJson,
+    (Join-Path $RepoRoot (Join-Path 'users' (Join-Path $env:USERNAME 'settings.json')))
+)
 $depsResult        = Test-Dependencies
 
 $anyFailure = (-not $settingsResult.Valid) -or
               (-not $heredocResult.Clean) -or
               (-not $hookPathResult.Valid) -or
               (-not $sharedPermsResult.Clean) -or
+              (-not $permRulesResult.Valid) -or
               (-not $depsResult.Valid)
 
 # Quick-mode environment checks (VS-1..VS-11)
@@ -156,10 +179,31 @@ $backupResult   = Test-BackupHealth
 $dispatchDocsResult = Test-DispatchDocs -CheckOnly:$CheckOnly
 $autoMaxResult      = Test-AutoMaxConfig -CheckOnly:$CheckOnly
 
+# Contract-doc audit (audit-docs.ps1): dangling path refs + agent/phase-table drift.
+# Runs as a child process because it is a standalone script, not a dot-sourced function.
+# Both sweeps caught real defects in 0.69.72 that no existing check covered.
+$auditDocsClean = $true
+$auditDocsScript = Join-Path $ScriptDir 'audit-docs.ps1'
+if (Test-Path -LiteralPath $auditDocsScript) {
+    $auditOut = & powershell -NoProfile -File $auditDocsScript -RepoRoot $script:RepoRoot -Quiet 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $auditDocsClean = $false
+        foreach ($line in @($auditOut)) {
+            $t = ([string]$line).Trim()
+            if ($t) { Write-Problem $t }
+        }
+    } elseif (-not $CheckOnly) {
+        Write-Check 'Contract docs: no dangling refs, no agent/table drift'
+    }
+} elseif (-not $CheckOnly) {
+    Write-Info 'audit-docs.ps1 not found; contract-doc audit skipped'
+}
+
 if (-not $circularResult.Clean)   { $anyFailure = $true }
 if (-not $backupResult.Valid)     { $anyFailure = $true }
 if (-not $dispatchDocsResult.Valid) { $anyFailure = $true }
 if (-not $autoMaxResult.Valid)    { $anyFailure = $true }
+if (-not $auditDocsClean)         { $anyFailure = $true }
 
 # Phase 2: Decision
 if (-not $anyFailure) {

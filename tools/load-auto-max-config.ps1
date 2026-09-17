@@ -5,7 +5,7 @@
 .DESCRIPTION
     Returns a flat hashtable keyed by dotted path. Schema:
         phase0.required:                bool   (default true)
-        phase0.codex_review:             bool   (default true)
+        phase0.peer_review:              bool   (default true)
         grep_gates.fail_fast:            bool   (default true)
         probes.parallel:                 bool   (default false)
         pipeline.max_iterations:         int    (default 3)
@@ -49,7 +49,7 @@ if (-not $RepoRoot) {
 # Baked-in defaults
 $script:AutoMaxDefaults = @{
     'phase0.required'                 = $true
-    'phase0.codex_review'             = $true
+    'phase0.peer_review'              = $true
     'grep_gates.fail_fast'            = $true
     'probes.parallel'                 = $false
     'pipeline.max_iterations'         = 3
@@ -60,7 +60,7 @@ $script:AutoMaxDefaults = @{
 # Map dotted paths to (block, key) pairs for the regex parser
 $script:AutoMaxKeyMap = @{
     'phase0.required'                  = @('phase0', 'required')
-    'phase0.codex_review'              = @('phase0', 'codex_review')
+    'phase0.peer_review'               = @('phase0', 'peer_review')
     'grep_gates.fail_fast'             = @('grep_gates', 'fail_fast')
     'probes.parallel'                  = @('probes', 'parallel')
     'pipeline.max_iterations'          = @('pipeline', 'max_iterations')

@@ -77,7 +77,10 @@ def resolve_task_type(
 
     Args:
         input_data: stdin dict from Claude Code (may contain 'prompt' or 'message').
-        session_state: SessionState or None — checked for ``task_type`` key.
+        session_state: any mapping with ``.get`` — a SessionState, a state
+            snapshot dict, or None. Stop passes a snapshot taken before the state
+            file is deleted (issue #202); reading a live SessionState after
+            cleanup silently returned defaults.
         fallback: returned when neither state nor prompt yields a type.
     """
     if session_state is not None:
@@ -106,6 +109,9 @@ def extract_tools_used(metrics: Dict[str, Any], session_state: Any) -> List[Dict
     Mutates ``metrics`` in place: when session_state reports a tool count
     higher than the transcript-derived count, the more accurate state value
     wins. Returns the tools_used list (may be empty).
+
+    ``session_state`` is any mapping with ``.get`` (SessionState, snapshot dict,
+    or None).
     """
     if session_state is None:
         return []

@@ -1,4 +1,4 @@
-"""Tests for pre_tool_use test-file edit detection (Non-Negotiable Rule #1)."""
+"""Tests for pre_tool_use test-file edit detection (fix the code under test, not the test)."""
 
 import sys
 from pathlib import Path
@@ -18,7 +18,7 @@ class TestTestFilePatternMatching:
     def test_matches_test_directory(self):
         result = check_test_file_edit({"file_path": "C:/repo/tests/test_foo.py"})
         assert result is not None
-        assert "Non-Negotiable Rule #1" in result
+        assert "fix the code" in result
 
     def test_matches_test_underscore_prefix(self):
         result = check_test_file_edit({"file_path": "C:/repo/test_quality_signals.py"})
@@ -89,9 +89,8 @@ class TestEdgeCases:
     def test_reminder_content(self):
         """Verify the reminder has the expected content."""
         result = check_test_file_edit({"file_path": "C:/repo/tests/test_foo.py"})
-        assert "REMINDER" in result
         assert "test file" in result.lower()
-        assert "Non-Negotiable Rule #1" in result
+        assert "fix the code under test rather than the test" in result
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ You are now acting as **claude-verify** — the verification loop that catches m
 
 ## Purpose
 
-After authoring code, run this skill to systematically check your work. Boris Cherny's #1 recommendation: "Give Claude a way to verify its work — it will 2-3x the quality."
+After authoring code, run this skill to check your work with the project's own build, lint, and test commands before review.
 
 ## Procedure
 

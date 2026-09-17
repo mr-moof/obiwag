@@ -9,10 +9,10 @@
       - guardian-repair.tests.ps1       (Repair-*, Snapshot, SafeMode, Issue)
       - check-auto-max.tests.ps1       (Test-AutoMaxConfig)
       - check-dispatch-docs.tests.ps1  (Test-DispatchDocs)
-    Compatible with Pester 3.4.0+.
+    Requires Pester 5.
 
 .EXAMPLE
-    Invoke-Pester C:\src\obiwag-agents\tools\config-guardian.tests.ps1
+    .\tools\run-tests.ps1 -Path tools\config-guardian.tests.ps1
 #>
 
 Describe 'Config Guardian Dispatcher' {
@@ -26,7 +26,10 @@ Describe 'Config Guardian Dispatcher' {
 
     BeforeEach {
         # Create isolated temp structure mimicking ~/.claude
-        $script:TempRoot = Join-Path $TestDrive (New-Guid).ToString()
+        # [guid]::NewGuid() not New-Guid: the .NET call has no dependency on the Utility module
+        # resolving, which can fail under PS 5.1 when a PowerShell 7 module path shadows 5.1's on
+        # PSModulePath. Equivalent and portable.
+        $script:TempRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         $script:ClaudeDir = Join-Path $TempRoot '.claude'
         $script:HooksDir = Join-Path $ClaudeDir 'hooks'
         $script:CoreDir = Join-Path $HooksDir 'core'
@@ -61,7 +64,9 @@ Describe 'Config Guardian Dispatcher' {
 
         # Create core modules (from manifest)
         $ManifestCoreModules | ForEach-Object {
-            Set-Content (Join-Path $CoreDir $_) "# placeholder" -Encoding UTF8
+            $modulePath = Join-Path $CoreDir $_
+            New-Item -ItemType Directory -Path (Split-Path -Parent $modulePath) -Force | Out-Null
+            Set-Content $modulePath "# placeholder" -Encoding UTF8
         }
     }
 
@@ -72,11 +77,11 @@ Describe 'Config Guardian Dispatcher' {
             foreach ($hf in $ManifestHookFiles) {
                 if (-not (Test-Path (Join-Path $HooksDir $hf))) { $allPresent = $false }
             }
-            $allPresent | Should Be $true
+            $allPresent | Should -Be $true
         }
 
         It 'Verifies settings.json is valid JSON' {
-            { Get-Content $SettingsPath -Raw | ConvertFrom-Json } | Should Not Throw
+            { Get-Content $SettingsPath -Raw | ConvertFrom-Json } | Should -Not -Throw
         }
     }
 
@@ -85,11 +90,11 @@ Describe 'Config Guardian Dispatcher' {
         It 'Accepts -CheckOnly -NoIssue -NoSnapshot (deploy-claude.ps1 call)' {
             $script = Join-Path $ScriptDir 'config-guardian.ps1'
             $params = (Get-Command $script).Parameters
-            $params.ContainsKey('CheckOnly') | Should Be $true
-            $params.ContainsKey('NoIssue') | Should Be $true
-            $params.ContainsKey('NoSnapshot') | Should Be $true
-            $params.ContainsKey('RepoRoot') | Should Be $true
-            $params.ContainsKey('Quick') | Should Be $true
+            $params.ContainsKey('CheckOnly') | Should -Be $true
+            $params.ContainsKey('NoIssue') | Should -Be $true
+            $params.ContainsKey('NoSnapshot') | Should -Be $true
+            $params.ContainsKey('RepoRoot') | Should -Be $true
+            $params.ContainsKey('Quick') | Should -Be $true
         }
     }
 }

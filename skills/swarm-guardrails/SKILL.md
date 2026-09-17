@@ -29,12 +29,9 @@ If an issue requires modifying any protected path, the worker MUST:
 
 ## Tool Constraints
 
-- **Use Write tool** for creating new files (NEVER Bash heredocs)
-- **Use Edit tool** for modifying files (NEVER sed/awk via Bash)
-- **Use Read tool** for reading files (NEVER cat/head/tail via Bash)
-- **Use Glob tool** for finding files (NEVER find/ls via Bash)
-- **Use Grep tool** for searching content (NEVER grep/rg via Bash)
-- **Bash is only for**: git commands, running tests, build commands
+Use the Read, Write, Edit, Glob, and Grep tools for file work; Bash is for git, tests, and builds.
+The pre-tool hook rejects shell substitutes (cat/sed/grep/find, heredocs), because heredocs with
+`#` lines trip Claude Code's safety prompt and long shell commands pollute `settings.local.json`.
 
 ## Worktree Isolation
 

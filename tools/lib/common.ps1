@@ -59,7 +59,8 @@ function Write-Repair {
 function Test-HookCommandPaths {
     <#
     .SYNOPSIS
-        Validate that script paths referenced in settings.json hook commands exist on disk.
+        Validate that script paths referenced in settings.json hook commands or exec-form
+        args exist on disk.
 
     .PARAMETER SettingsPath
         Path to the settings.json file to validate.
@@ -85,9 +86,12 @@ function Test-HookCommandPaths {
         $settings = Get-Content $SettingsPath -Raw | ConvertFrom-Json
         if (-not $settings.hooks) { return $results }
 
-        $hookTypes = @('SessionStart', 'Stop', 'PreToolUse', 'PostToolUse')
-        foreach ($hookType in $hookTypes) {
-            $hookList = $settings.hooks.$hookType
+        # Enumerate the configured event properties instead of maintaining a partial list.
+        # Claude adds hook events over time; omitting one makes a missing script invisible to
+        # both deploy.ps1 and config-guardian.ps1 (PostToolUseFailure and SubagentStop were
+        # previously missed here).
+        foreach ($hookProperty in $settings.hooks.PSObject.Properties) {
+            $hookList = $hookProperty.Value
             if (-not $hookList) { continue }
 
             foreach ($hookGroup in $hookList) {
@@ -95,11 +99,33 @@ function Test-HookCommandPaths {
                     $cmd = $hook.command
                     if (-not $cmd) { continue }
 
-                    $expanded = $cmd -replace '%USERPROFILE%', $env:USERPROFILE
-                    $expanded = $expanded -replace '\$HOME', $env:USERPROFILE
+                    # Shell-form hooks embed the script in `command`; exec-form hooks use a
+                    # bare executable plus an `args` array. Inspect both so switching the hot
+                    # path away from a shell wrapper does not weaken deployment validation.
+                    $candidates = @()
+                    $expandedCommand = $cmd -replace '%USERPROFILE%', $env:USERPROFILE
+                    $expandedCommand = $expandedCommand -replace '\$HOME', $env:USERPROFILE
 
-                    if ($expanded -match '"([^"]+\.(cmd|ps1|py))"') {
-                        $scriptPath = $Matches[1]
+                    foreach ($match in [regex]::Matches($expandedCommand, '["'']([^"'']+\.(cmd|ps1|py))["'']')) {
+                        $candidates += $match.Groups[1].Value
+                    }
+
+                    $bareCommand = $expandedCommand.Trim().Trim('"').Trim("'")
+                    if ($bareCommand -match '\.(cmd|ps1|py)$') {
+                        $candidates += $bareCommand
+                    }
+
+                    foreach ($arg in @($hook.args)) {
+                        if ($null -eq $arg) { continue }
+                        $expandedArg = ([string]$arg) -replace '%USERPROFILE%', $env:USERPROFILE
+                        $expandedArg = $expandedArg -replace '\$HOME', $env:USERPROFILE
+                        $expandedArg = $expandedArg.Trim().Trim('"').Trim("'")
+                        if ($expandedArg -match '\.(cmd|ps1|py)$') {
+                            $candidates += $expandedArg
+                        }
+                    }
+
+                    foreach ($scriptPath in @($candidates | Select-Object -Unique)) {
                         $found = Test-Path $scriptPath
 
                         if (-not $found -and $FallbackDir) {

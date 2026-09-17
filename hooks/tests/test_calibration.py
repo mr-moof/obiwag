@@ -406,7 +406,7 @@ class TestLoadCalibrationCaching:
     """Issue #176 (OPT-03): load_calibration must dedupe reads within a process.
 
     PostToolUse calls load_calibration / get_interval / is_safety_enabled
-    2-3 times per tool event. On network-profile VDIs each open() is a stat
+    2-3 times per tool event. On network-profile remote desktops each open() is a stat
     storm. The mtime cache must serve repeat calls from memory: at most ONE
     calibration.md read per process while the file is unchanged.
     """

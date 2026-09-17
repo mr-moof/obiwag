@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Obi peer-review request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "objective", "acceptance_criteria"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "objective": {"type": "string", "minLength": 1},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "focus": {"type": "array", "items": {"type": "string"}},
+    "include_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "source", "deployed"],
+        "properties": {
+          "label": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
+          "source": {"type": "string", "minLength": 1},
+          "deployed": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "path"],
+        "properties": {
+          "label": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
+          "path": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

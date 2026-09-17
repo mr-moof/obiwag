@@ -41,7 +41,7 @@ class TestIsRepoDirty:
             is_repo_dirty("/fake/repo")
             args, kwargs = mock_run.call_args
             assert args[0] == ["git", "-C", "/fake/repo", "status", "--porcelain"]
-            assert kwargs.get("timeout") == 10
+            assert kwargs.get("timeout") == 2.5
             assert kwargs.get("capture_output") is True
             assert kwargs.get("text") is True
 

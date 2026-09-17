@@ -229,6 +229,54 @@ function Test-SharedPermissions {
     return $results
 }
 
+function Test-PermissionRules {
+    <#
+    .SYNOPSIS
+        Reject path-qualified Write(...) permission rules (issue #200 SS5).
+    .DESCRIPTION
+        A `permissions.allow` entry of the form `Write(<path>)` makes Claude Code emit a
+        permission-rule warning at startup. `Edit(<path>)` is the correct rule type -- it covers
+        the file-editing tools -- so this is a semantic-preserving rule-type correction. This check
+        flags any `Write(...)` allow entry (path-qualified) and accepts the corrected `Edit(...)`
+        forms. Bare `Write` (tool-level, no parentheses) is fine and NOT flagged.
+
+        Defaults to the deployed $SettingsJson. Deployment validation passes the source file(s) via
+        -SettingsPaths so a bad rule is caught BEFORE it is deployed, not only after.
+    #>
+    param([string[]]$SettingsPaths = @($SettingsJson))
+
+    $results = @{ Valid = $true; Violations = @() }
+
+    foreach ($path in $SettingsPaths) {
+        if (-not $path -or -not (Test-Path $path)) { continue }
+        try {
+            $json = Get-Content $path -Raw | ConvertFrom-Json
+        } catch {
+            # JSON syntax errors are reported by Test-SettingsJson; skip here.
+            Write-Detail "Skipped permission-rule check (unparseable): $path"
+            continue
+        }
+
+        $allow = @()
+        if ($json.permissions -and $json.permissions.allow) { $allow = @($json.permissions.allow) }
+
+        # Path-qualified Write(...) only. Bare `Write` has no parentheses and is allowed.
+        $bad = @($allow | Where-Object { $_ -is [string] -and $_ -match '^Write\(.+\)$' })
+        if ($bad.Count -gt 0) {
+            $results.Valid = $false
+            foreach ($rule in $bad) {
+                $results.Violations += @{ Path = $path; Rule = $rule }
+                Write-Problem "Path-qualified Write() permission rule: '$rule' ($path)"
+            }
+            Write-Detail "  Use Edit(...) instead -- Edit covers file-editing tools and clears the startup warning."
+        } else {
+            Write-Check "Permission rules: no path-qualified Write() entries ($path)"
+        }
+    }
+
+    return $results
+}
+
 function Test-Dependencies {
     <#
     .SYNOPSIS

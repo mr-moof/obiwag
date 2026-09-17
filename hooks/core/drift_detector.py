@@ -11,6 +11,7 @@ mappings if no manifest is found.
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -31,8 +32,8 @@ EXCLUDE_DIRS = {'.obi', 'projects', '__pycache__', '.pytest_cache', 'node_module
 EXCLUDE_EXTENSIONS = {'.pyc', '.pyo', '.exe', '.dll'}
 
 # Top-level deployed dirs scanned for unmanifested files. skills/ is multi-tenant
-# (only walked under subdirs that already have ≥1 manifest entry, so an
-# externally-managed skill is skipped). hooks/ and docs/ are
+# (only walked under subdirs that already have ≥1 manifest entry, so externally
+# managed skills like coordinator-healthcheck are skipped). hooks/ and docs/ are
 # wholesale Obi-managed, so any file there without a manifest entry is orphan
 # state. commands/ and agents/ are deliberately omitted: they may legitimately
 # hold user-authored items alongside Obi-managed ones.
@@ -50,7 +51,10 @@ def get_deployed_root() -> str:
     return str(get_obi_root())
 
 
-def file_hash(path: str) -> Optional[str]:
+def file_hash(
+    path: str,
+    deadline_monotonic: Optional[float] = None,
+) -> Optional[str]:
     """Compute SHA256 hash of a file's content, normalizing line endings.
 
     Normalizes CRLF to LF before hashing so Windows vs Unix line endings
@@ -60,9 +64,22 @@ def file_hash(path: str) -> Optional[str]:
     """
     try:
         h = hashlib.sha256()
+        pending = b''
         with open(path, 'rb') as f:
-            content = f.read()
-        h.update(content.replace(b'\r\n', b'\n'))
+            while True:
+                if _deadline_expired(deadline_monotonic):
+                    return None
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    if pending:
+                        h.update(pending)
+                    break
+                content = pending + chunk
+                if content.endswith(b'\r'):
+                    content, pending = content[:-1], b'\r'
+                else:
+                    pending = b''
+                h.update(content.replace(b'\r\n', b'\n'))
         return h.hexdigest()
     except (OSError, IOError):
         return None
@@ -190,15 +207,23 @@ def get_file_pairs() -> List[Dict]:
     return pairs
 
 
-def detect_unmanifested(manifest: Optional[Dict[str, str]], deployed_root: str) -> List[Dict]:
+def _deadline_expired(deadline_monotonic: Optional[float]) -> bool:
+    return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+
+
+def detect_unmanifested(
+    manifest: Optional[Dict[str, str]],
+    deployed_root: str,
+    deadline_monotonic: Optional[float] = None,
+) -> List[Dict]:
     """Find files in Obi-managed deployed dirs that aren't in the manifest.
 
     Closes the blind spot where a deployed-only file (created locally without
     a source counterpart) never surfaces because detect_drift() walks the
     manifest, not the deployed tree.
 
-    Skips externally managed multi-tenant subdirs (e.g. an externally-managed
-    skill dir which has zero manifest entries). Only scans dirs listed in
+    Skips externally managed multi-tenant subdirs (e.g. skills/coordinator-
+    healthcheck/ which has zero manifest entries). Only scans dirs listed in
     UNMANIFESTED_SCAN_DIRS and UNMANIFESTED_SCAN_MULTI_TENANT_DIRS — commands/
     and agents/ are excluded because they may legitimately hold user-authored
     items.
@@ -214,8 +239,12 @@ def detect_unmanifested(manifest: Optional[Dict[str, str]], deployed_root: str) 
         if not os.path.isdir(top_abs):
             return
         for root, dirs, files in os.walk(top_abs):
+            if _deadline_expired(deadline_monotonic):
+                return
             dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
             for fname in files:
+                if _deadline_expired(deadline_monotonic):
+                    return
                 file_abs = os.path.join(root, fname)
                 rel = os.path.relpath(file_abs, deployed_root).replace('\\', '/')
                 if _should_skip(rel) or rel in manifest_paths:
@@ -241,7 +270,7 @@ def detect_unmanifested(manifest: Optional[Dict[str, str]], deployed_root: str) 
     return unmanifested
 
 
-def detect_drift() -> Dict:
+def detect_drift(deadline_monotonic: Optional[float] = None) -> Dict:
     """Compare all deployed files against their source counterparts.
 
     Returns dict with:
@@ -256,6 +285,7 @@ def detect_drift() -> Dict:
         'checked': 0,
         'source_path': source_path,
         'total_drifted': 0,
+        'timed_out': False,
     }
 
     if source_path is None:
@@ -265,8 +295,17 @@ def detect_drift() -> Dict:
     result['checked'] = len(pairs)
 
     for pair in pairs:
-        deployed_hash = file_hash(pair['deployed'])
-        source_hash = file_hash(pair['source'])
+        if _deadline_expired(deadline_monotonic):
+            result['timed_out'] = True
+            break
+        deployed_hash = file_hash(pair['deployed'], deadline_monotonic)
+        if _deadline_expired(deadline_monotonic):
+            result['timed_out'] = True
+            break
+        source_hash = file_hash(pair['source'], deadline_monotonic)
+        if _deadline_expired(deadline_monotonic):
+            result['timed_out'] = True
+            break
 
         if deployed_hash is None:
             # Deployed file disappeared (shouldn't happen since we walked it)
@@ -290,7 +329,16 @@ def detect_drift() -> Dict:
             })
 
     # Second pass: deployed files in Obi-managed dirs not in the manifest.
-    result['drifted'].extend(detect_unmanifested(load_manifest(), get_deployed_root()))
+    if not result['timed_out']:
+        result['drifted'].extend(
+            detect_unmanifested(
+                load_manifest(),
+                get_deployed_root(),
+                deadline_monotonic=deadline_monotonic,
+            )
+        )
+        if _deadline_expired(deadline_monotonic):
+            result['timed_out'] = True
 
     result['total_drifted'] = len(result['drifted'])
     return result

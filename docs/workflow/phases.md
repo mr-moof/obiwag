@@ -7,6 +7,15 @@ For the phase table, signals, lane rules, and flow diagram, see `phases/README.m
 
 This file provides **per-phase details** (activities, rules, checklists) that supplement the phase table.
 
+## Model Budget
+
+- Discovery and Author use the frontier model at `xhigh` effort: Claude `fable[1m]`; Codex
+  `gpt-5.6-sol`.
+- The coordinator and phases 3-10 use the balanced model at `medium` effort: Claude `sonnet`;
+  Codex `gpt-5.6-terra`.
+- `rigor: max` adds deterministic gates; it does not raise model effort. Opposite-provider peer
+  review remains a separate quality check under `policies/peer-review.md`.
+
 ---
 
 ## Phase Details
@@ -26,7 +35,9 @@ This file provides **per-phase details** (activities, rules, checklists) that su
 **Output:** `.obi/discovery-report.md`
 
 **Completion Signal:** `DISCOVERY COMPLETE`
-**Failure Signal:** `NEEDS USER INPUT: [what's needed]`
+**Failure Signal:** `MISSING SOURCE: [expected evidence location]`. In autonomous modes a missing
+decision is classified first: recover in scope and append the decision, and halt only on a named
+terminal boundary (`user_abort`, `hard_stop`).
 
 ---
 
@@ -44,8 +55,8 @@ This file provides **per-phase details** (activities, rules, checklists) that su
 
 **Rules:**
 - Small diffs (one logical change at a time)
-- Never add features to broken code
-- Never commit without running linter
+- Get a minimal working version through the linter and pipeline first; the Validation sequence
+  runs the linter before every commit.
 
 **Completion Signal:** `AUTHOR COMPLETE`
 **Failure Signal:** Loop back, fix issues
@@ -108,7 +119,10 @@ This file provides **per-phase details** (activities, rules, checklists) that su
 - Re-run tests to verify fixes
 - Document what was changed
 
-**Completion Signal:** `INTEGRATE COMPLETE`
+**Completion Signal:** `INTEGRATE COMPLETE`, or `INTEGRATE NO-OP: [reason]` when Review has zero
+faults/fixes/improvements/disputes, triage is empty, and independently recomputed before/after HEAD
+and worktree digests are identical. The no-op transition skips Phase 6; any missing/mismatched
+evidence fails closed and keeps Re-review.
 **Failure Signal:** Loop back, address blocking issues
 
 ---

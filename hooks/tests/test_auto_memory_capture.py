@@ -2,6 +2,8 @@
 
 import json
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 HOOKS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
 
+import core.auto_memory_capture as auto_memory_capture
 from core.auto_memory_capture import (
     ANS_ID_TO_PROBE,
     CONFIDENCE_THRESHOLD,
@@ -22,6 +25,7 @@ from core.auto_memory_capture import (
     slugify,
     write_surprise_artifacts,
 )
+from core.session_state import StateUnavailable, bounded_file_lock
 
 
 # ---------- compute_surprises ----------
@@ -104,7 +108,7 @@ class TestComputeSurprises:
         probes = [{
             'probe': 'namespace_kind',
             'status': 'ok',
-            'data': {'kind': 'group', 'id': 7, 'full_path': 'example-org/services'},
+            'data': {'kind': 'group', 'id': 7, 'full_path': 'example-team/services'},
         }]
         # 'group' is in data, no surprise
         assert compute_surprises(0, answers, probes) == []
@@ -242,15 +246,15 @@ class TestWriteSurpriseArtifacts:
         candidate = {
             'phase': 3,
             'expected_id': 'runner_tags',
-            'expected_value': 'win-container-bld',
+            'expected_value': 'default-build',
             'actual_probe': 'runner_tags',
-            'actual_value': 'pscodesign',
+            'actual_value': 'custom-build',
             'actual_status': 'ok',
             'divergence': 'answer not present in probe data',
         }
         verdict = {
             'confidence': 0.92,
-            'summary': 'the runner tag is fast not slow',
+            'summary': 'example runner tag is custom-build not default-build',
             'type': 'tool',
         }
 
@@ -261,8 +265,8 @@ class TestWriteSurpriseArtifacts:
         md_files = list(pending.glob('surprise-3-*.md'))
         assert len(md_files) == 1
         body = md_files[0].read_text(encoding='utf-8')
-        assert 'pscodesign' in body
-        assert 'win-container-bld' in body
+        assert 'custom-build' in body
+        assert 'default-build' in body
 
         # JSON entry
         assert learnings.exists()
@@ -271,7 +275,7 @@ class TestWriteSurpriseArtifacts:
         assert len(data['learnings']) == 1
         e = data['learnings'][0]
         assert e['type'] == 'tool'
-        assert e['title'].startswith('the runner tag')
+        assert e['title'].startswith('example runner tag')
         assert e['confidence'] == 0.92
         assert e['metadata']['auto_captured'] is True
         assert e['metadata']['phase'] == 3
@@ -343,15 +347,15 @@ class TestWriteSurpriseArtifacts:
         assert len(data['learnings']) == 3
 
     def test_concurrent_threads_serialize_via_lock(self, tmp_path):
-        """Round 3 regression: spawn N threads racing for the lock. Each
+        """Spawn N threads racing for the lock. Each
         thread appends its own entry. After all complete, every entry must
-        be present (no drops from TOCTOU). Verifies the os.open(O_EXCL) lock
-        fix actually serializes concurrent appends."""
-        import threading
+        be present (no drops from TOCTOU or transient replace denial)."""
 
         pending = tmp_path / 'pending'
         learnings = tmp_path / 'pending-learnings.json'
         n_threads = 8
+        errors = []
+        errors_lock = threading.Lock()
 
         def worker(i):
             candidate = {
@@ -362,7 +366,11 @@ class TestWriteSurpriseArtifacts:
                 'divergence': f'diverge_{i}',
             }
             verdict = {'confidence': 0.9, 'summary': f'race-entry-{i}', 'type': 'user'}
-            write_surprise_artifacts(candidate, verdict, pending, learnings)
+            try:
+                write_surprise_artifacts(candidate, verdict, pending, learnings)
+            except Exception as exc:  # surfaced below on the parent test thread
+                with errors_lock:
+                    errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
         for t in threads:
@@ -370,6 +378,8 @@ class TestWriteSurpriseArtifacts:
         for t in threads:
             t.join(timeout=15)
 
+        assert not [t for t in threads if t.is_alive()]
+        assert errors == []
         data = json.loads(learnings.read_text(encoding='utf-8'))
         titles = sorted(l.get('title') for l in data['learnings'])
         expected = sorted(f'race-entry-{i}' for i in range(n_threads))
@@ -378,9 +388,131 @@ class TestWriteSurpriseArtifacts:
         )
         assert len(data['learnings']) == n_threads
 
-        # Lock file should not be left behind after all threads complete
+        # The crash-safe sidecar persists, but its kernel lock must be released.
         lock_path = learnings.with_name(learnings.name + '.lock')
-        assert not lock_path.exists()
+        with bounded_file_lock(str(lock_path), timeout=0.2):
+            pass
+
+    def test_retries_transient_windows_replace_denial(self, tmp_path, monkeypatch):
+        pending = tmp_path / 'pending'
+        learnings = tmp_path / 'pending-learnings.json'
+        original_replace = auto_memory_capture.os.replace
+        calls = 0
+
+        def flaky_replace(source, destination):
+            nonlocal calls
+            calls += 1
+            if calls < 3:
+                raise PermissionError(5, 'destination temporarily open')
+            original_replace(source, destination)
+
+        monkeypatch.setattr(auto_memory_capture.os, 'replace', flaky_replace)
+        candidate = {
+            'phase': 1, 'expected_id': 'a', 'expected_value': 'b',
+            'actual_probe': 'a', 'actual_value': 'c', 'actual_status': 'ok',
+            'divergence': 'mismatch',
+        }
+        verdict = {'confidence': 0.9, 'summary': 'retried', 'type': 'user'}
+
+        write_surprise_artifacts(candidate, verdict, pending, learnings)
+
+        assert calls == 3
+        assert json.loads(learnings.read_text(encoding='utf-8'))['learnings'][0]['title'] == 'retried'
+
+    def test_retries_transient_read_denial_without_losing_existing(self, tmp_path, monkeypatch):
+        pending = tmp_path / 'pending'
+        learnings = tmp_path / 'pending-learnings.json'
+        learnings.write_text(json.dumps({'learnings': [{'title': 'existing'}]}), encoding='utf-8')
+        original_read_text = Path.read_text
+        calls = 0
+
+        def flaky_read_text(path, *args, **kwargs):
+            nonlocal calls
+            if path == learnings:
+                calls += 1
+                if calls < 3:
+                    raise PermissionError(5, 'source temporarily open')
+            return original_read_text(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, 'read_text', flaky_read_text)
+        candidate = {
+            'phase': 1, 'expected_id': 'a', 'expected_value': 'b',
+            'actual_probe': 'a', 'actual_value': 'c', 'actual_status': 'ok',
+            'divergence': 'mismatch',
+        }
+        verdict = {'confidence': 0.9, 'summary': 'new', 'type': 'user'}
+
+        write_surprise_artifacts(candidate, verdict, pending, learnings)
+
+        titles = [entry['title'] for entry in json.loads(
+            original_read_text(learnings, encoding='utf-8')
+        )['learnings']]
+        assert calls == 3
+        assert titles == ['existing', 'new']
+
+    def test_does_not_trust_exists_preflight_for_authoritative_state(self, tmp_path, monkeypatch):
+        pending = tmp_path / 'pending'
+        learnings = tmp_path / 'pending-learnings.json'
+        learnings.write_text(json.dumps({'learnings': [{'title': 'existing'}]}), encoding='utf-8')
+        original_exists = Path.exists
+
+        def false_negative_exists(path):
+            if path == learnings:
+                return False
+            return original_exists(path)
+
+        monkeypatch.setattr(Path, 'exists', false_negative_exists)
+        candidate = {
+            'phase': 1, 'expected_id': 'a', 'expected_value': 'b',
+            'actual_probe': 'a', 'actual_value': 'c', 'actual_status': 'ok',
+            'divergence': 'mismatch',
+        }
+        verdict = {'confidence': 0.9, 'summary': 'new', 'type': 'user'}
+
+        write_surprise_artifacts(candidate, verdict, pending, learnings)
+
+        titles = [entry['title'] for entry in json.loads(
+            learnings.read_text(encoding='utf-8')
+        )['learnings']]
+        assert titles == ['existing', 'new']
+
+    def test_lock_timeout_fails_closed_without_unlocked_write(self, tmp_path, monkeypatch):
+        pending = tmp_path / 'pending'
+        learnings = tmp_path / 'pending-learnings.json'
+
+        @contextmanager
+        def unavailable_lock(*_args, **_kwargs):
+            raise StateUnavailable('held')
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(auto_memory_capture, 'bounded_file_lock', unavailable_lock)
+        candidate = {
+            'phase': 1, 'expected_id': 'a', 'expected_value': 'b',
+            'actual_probe': 'a', 'actual_value': 'c', 'actual_status': 'ok',
+            'divergence': 'mismatch',
+        }
+        verdict = {'confidence': 0.9, 'summary': 'blocked', 'type': 'user'}
+
+        with pytest.raises(StateUnavailable):
+            write_surprise_artifacts(candidate, verdict, pending, learnings)
+
+        assert not learnings.exists()
+
+    def test_normalizes_valid_json_with_invalid_learnings_shape(self, tmp_path):
+        pending = tmp_path / 'pending'
+        learnings = tmp_path / 'pending-learnings.json'
+        learnings.write_text('{"learnings": {"not": "a list"}}', encoding='utf-8')
+        candidate = {
+            'phase': 1, 'expected_id': 'a', 'expected_value': 'b',
+            'actual_probe': 'a', 'actual_value': 'c', 'actual_status': 'ok',
+            'divergence': 'mismatch',
+        }
+        verdict = {'confidence': 0.9, 'summary': 'normalized', 'type': 'user'}
+
+        write_surprise_artifacts(candidate, verdict, pending, learnings)
+
+        data = json.loads(learnings.read_text(encoding='utf-8'))
+        assert [entry['title'] for entry in data['learnings']] == ['normalized']
 
     def test_recovers_from_corrupted_pending_learnings(self, tmp_path):
         pending = tmp_path / 'pending'

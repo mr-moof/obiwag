@@ -1,5 +1,7 @@
 ---
 description: Post-author cleanup. Enforce project standards without changing functionality. Reduce complexity where possible.
+model: sonnet
+effort: medium
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write
 ---
 
@@ -39,19 +41,11 @@ After each change:
 2. Run tests - must pass
 3. Commit only if both pass
 
-## Rules
+## Scope
 
-### DO
-- Apply consistent formatting
-- Remove genuinely dead code
-- Simplify without changing behavior
-- Keep changes minimal and focused
-
-### DON'T
-- Change functionality
-- Add new features
-- Refactor working code significantly
-- Add comments to code you didn't write
+Keep every change behavior-preserving and minimal: formatting, genuinely dead code, and local
+simplification. Functionality changes, new features, or significant refactors of working code
+belong to Author — making them here invalidates the Author Report the reviewer is about to verify.
 
 ## Output Format
 
@@ -70,11 +64,6 @@ After each change:
 ```
 
 ## Completion
-
-On entry, emit the progress bar with Simplify active:
-```
-[3/10] ● Disc ━ ● Auth ━ ◐ Simp ━ ○ Rev ━ ○ Intg ━ ○ ReRv ━ ○ Read ━ ○ RdRv ━ ○ Rel ━ ○ Lrn
-```
 
 - **Changes made:** Output `SIMPLIFY COMPLETE`
 - **No changes needed:** Output `SIMPLIFY SKIPPED`

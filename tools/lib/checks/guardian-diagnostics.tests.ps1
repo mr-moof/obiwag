@@ -1,16 +1,18 @@
 <#
 .SYNOPSIS
-    Pester 3.4 tests for tools/lib/checks/guardian-diagnostics.ps1
+    Pester 5 tests for tools/lib/checks/guardian-diagnostics.ps1
     (Test-CircularDeps and Test-BackupHealth functions).
 #>
 
 Describe 'Guardian Diagnostics' {
 
-    # Load hook manifest (single source of truth for filenames)
-    $script:ToolsDir = Join-Path (Split-Path -Parent $PSScriptRoot) '..'
-    $script:ToolsDir = (Resolve-Path $script:ToolsDir).Path
-
     BeforeEach {
+        # $ToolsDir must be resolved here, not in the Describe body: code directly in
+        # a Describe runs during Pester 5's DISCOVERY pass, so the value is gone by
+        # the time this BeforeEach executes and Join-Path receives $null.
+        $script:ToolsDir = Join-Path (Split-Path -Parent $PSScriptRoot) '..'
+        $script:ToolsDir = (Resolve-Path $script:ToolsDir).Path
+
         # Dot-source dependencies
         . (Join-Path $script:ToolsDir 'lib\common.ps1')
         . (Join-Path $script:ToolsDir 'lib\checks\guardian-diagnostics.ps1')
@@ -48,8 +50,8 @@ Describe 'Guardian Diagnostics' {
                 $graph[$moduleName] = $imports | Select-Object -Unique
             }
 
-            ($graph['module_a'] -contains 'module_b') | Should Be $true
-            ($graph['module_b'] -contains 'module_a') | Should Be $true
+            ($graph['module_a'] -contains 'module_b') | Should -Be $true
+            ($graph['module_b'] -contains 'module_a') | Should -Be $true
         }
 
         It 'Detects transitive A->B->C->A cycle' {
@@ -69,9 +71,44 @@ Describe 'Guardian Diagnostics' {
                 $graph[$moduleName] = $imports | Select-Object -Unique
             }
 
-            ($graph['mod_x'] -contains 'mod_y') | Should Be $true
-            ($graph['mod_y'] -contains 'mod_z') | Should Be $true
-            ($graph['mod_z'] -contains 'mod_x') | Should Be $true
+            ($graph['mod_x'] -contains 'mod_y') | Should -Be $true
+            ($graph['mod_y'] -contains 'mod_z') | Should -Be $true
+            ($graph['mod_z'] -contains 'mod_x') | Should -Be $true
+        }
+
+        It 'Test-CircularDeps flags a real MODULE-LEVEL cycle' {
+            # Exercises the production function, not an inline copy of its graph builder.
+            Set-Content (Join-Path $CoreDir 'top_a.py') 'from .top_b import thing' -Encoding UTF8
+            Set-Content (Join-Path $CoreDir 'top_b.py') 'from .top_a import thing' -Encoding UTF8
+
+            $r = Test-CircularDeps
+            $r.Clean | Should -Be $false
+            (@($r.Cycles).Count -gt 0) | Should -Be $true
+        }
+
+        It 'Test-CircularDeps does NOT flag a cycle formed only by DEFERRED imports' {
+            # The real false positive this check produced for months:
+            # session_state <-> memory_reader, where BOTH edges are function-local and one is
+            # explicitly commented "Imported lazily ... a module-level import would be
+            # circular". A deferred import does not run at import time, so it cannot cause the
+            # ImportError this check exists to catch. Flagging it left config-guardian
+            # permanently red, which trains readers to ignore guardian output.
+            $a = @(
+                'def get_thing():',
+                '    from .lazy_b import helper   # deferred: lazy_b imports us',
+                '    return helper()'
+            ) -join "`n"
+            $b = @(
+                'def get_other():',
+                '    from .lazy_a import get_thing  # deferred: lazy_a imports us',
+                '    return get_thing()'
+            ) -join "`n"
+            Set-Content (Join-Path $CoreDir 'lazy_a.py') $a -Encoding UTF8
+            Set-Content (Join-Path $CoreDir 'lazy_b.py') $b -Encoding UTF8
+
+            $r = Test-CircularDeps
+            $r.Clean | Should -Be $true
+            @($r.Cycles).Count | Should -Be 0
         }
 
         It 'Reports but does not break cycles (safe behavior)' {
@@ -82,8 +119,8 @@ Describe 'Guardian Diagnostics' {
             $contentB = Get-Content (Join-Path $CoreDir 'cyc_b.py') -Raw
 
             # Files are unchanged (function only logs, doesn't edit)
-            (Get-Content (Join-Path $CoreDir 'cyc_a.py') -Raw) | Should Be $contentA
-            (Get-Content (Join-Path $CoreDir 'cyc_b.py') -Raw) | Should Be $contentB
+            (Get-Content (Join-Path $CoreDir 'cyc_a.py') -Raw) | Should -Be $contentA
+            (Get-Content (Join-Path $CoreDir 'cyc_b.py') -Raw) | Should -Be $contentB
         }
 
         It 'Ignores safe patterns (hooks reading calibration data)' {
@@ -103,7 +140,7 @@ def load_calibration():
                 }
             }
 
-            $imports.Count | Should Be 0
+            $imports.Count | Should -Be 0
         }
     }
 
@@ -113,7 +150,7 @@ def load_calibration():
             # No backup dir exists in temp - the function checks a real path,
             # so we test the pattern: directory not present => invalid result
             $backupDir = Join-Path $TempRoot 'nonexistent-backup'
-            (Test-Path $backupDir) | Should Be $false
+            (Test-Path $backupDir) | Should -Be $false
         }
     }
 }

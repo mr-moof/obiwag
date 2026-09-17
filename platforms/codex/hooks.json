@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd session_start\"",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBI_HOME set OBI_HOME=%USERPROFILE%\\.obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd session_start\"",
             "timeout": 5
           }
         ]
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd pre_tool_use\"",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBI_HOME set OBI_HOME=%USERPROFILE%\\.obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd pre_tool_use\"",
             "timeout": 5
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd post_tool_use\"",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBI_HOME set OBI_HOME=%USERPROFILE%\\.obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd post_tool_use\"",
             "timeout": 3
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBIWAG_SOURCE set OBIWAG_SOURCE=C:\\src\\obiwag-agents&& if not defined OBI_HOME set OBI_HOME=C:\\src\\obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd stop\"",
+            "command": "cmd.exe /v:on /d /c \"set OBI_PLATFORM=codex&& if not defined OBI_HOME set OBI_HOME=%USERPROFILE%\\.obi-tools&& !OBI_HOME!\\hooks\\hook_wrapper_codex.cmd stop\"",
             "timeout": 10
           }
         ]

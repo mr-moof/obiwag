@@ -169,7 +169,7 @@ class TestBashRuleBehavior:
     def test_normal_commands_dont_match(self):
         for cmd in [
             "git -C /repo status",
-            "git push origin master",
+            "git push origin main",
             "python -m pytest tests/",
             "npm install",
             "go build ./cmd/server",

@@ -4,22 +4,18 @@ Covers:
   - DriftDetectorStop        (stop-side drift message)
   - DriftNagStop             (stop-side drift-nag delta message)
   - DriftDetectorSessionStart (session_start drift + baseline save)
-  - CorrectionRetrieverDetector (session_start correction injection)
 """
 
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 HOOKS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
 
-from core.detector_registry import Detector, DetectorContext  # noqa: E402
-from core.detectors.correction_retriever_detector import CorrectionRetrieverDetector  # noqa: E402
+from core.detector_registry import DetectorContext  # noqa: E402
 from core.detectors.drift_detector_session_start import DriftDetectorSessionStart  # noqa: E402
 from core.detectors.drift_detector_stop import DriftDetectorStop  # noqa: E402
 from core.detectors.drift_nag_stop import DriftNagStop  # noqa: E402
@@ -203,77 +199,3 @@ class TestDriftDetectorSessionStart:
         assert result is not None
         assert "2 file(s) differ" in result
         mock_log.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# CorrectionRetrieverDetector
-# ---------------------------------------------------------------------------
-
-class TestCorrectionRetrieverDetector:
-    def test_name(self):
-        assert CorrectionRetrieverDetector().name == 'correction_retriever'
-
-    def test_hook_point(self):
-        assert CorrectionRetrieverDetector().hook_point == 'session_start'
-
-    def test_enabled_when_auto_inject_sources_true(self):
-        cal = {'safety': {'auto_inject_sources': True}}
-        assert CorrectionRetrieverDetector().is_enabled(cal) is True
-
-    def test_disabled_when_auto_inject_sources_false(self):
-        cal = {'safety': {'auto_inject_sources': False}}
-        assert CorrectionRetrieverDetector().is_enabled(cal) is False
-
-    def test_enabled_by_default_when_key_missing(self):
-        assert CorrectionRetrieverDetector().is_enabled({}) is True
-
-    def test_run_returns_injection_when_corrections_found(self):
-        ctx = _make_ctx(
-            hook_point='session_start',
-            task_type='review',
-            task_text='fix the cloud API call',
-        )
-        with patch("core.correction_retriever.get_correction_injection",
-                   return_value="## Relevant Past Corrections\n\nsome corrections") as mock_inj:
-            result = CorrectionRetrieverDetector().run(ctx)
-        mock_inj.assert_called_once_with('review', 'fix the cloud API call')
-        assert result is not None
-        assert "Relevant Past Corrections" in result
-
-    def test_run_returns_none_when_no_corrections(self):
-        ctx = _make_ctx(
-            hook_point='session_start',
-            task_type='review',
-            task_text='fix the bug',
-        )
-        with patch("core.correction_retriever.get_correction_injection",
-                   return_value=None):
-            result = CorrectionRetrieverDetector().run(ctx)
-        assert result is None
-
-    def test_run_returns_none_when_no_task_text(self):
-        ctx = _make_ctx(
-            hook_point='session_start',
-            task_type='',
-            task_text='',
-        )
-        with patch("core.correction_retriever.get_correction_injection") as mock_inj:
-            result = CorrectionRetrieverDetector().run(ctx)
-        mock_inj.assert_not_called()
-        assert result is None
-
-    def test_output_has_leading_newline(self):
-        """Output must have a leading newline to match original welcome_parts assembly."""
-        ctx = _make_ctx(
-            hook_point='session_start',
-            task_type='author',
-            task_text='write a test',
-        )
-        with patch("core.correction_retriever.get_correction_injection",
-                   return_value="## Corrections"):
-            result = CorrectionRetrieverDetector().run(ctx)
-        assert result.startswith("\n")
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

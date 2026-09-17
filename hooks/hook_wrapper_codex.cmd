@@ -6,7 +6,6 @@ rem Sets the Codex platform marker, then delegates to the normal hook script.
 rem Always exits 0 so hook failures do not block Codex tool use.
 
 set "OBI_PLATFORM=codex"
-if "%OBIWAG_SOURCE%"=="" set "OBIWAG_SOURCE=C:\src\obiwag-agents"
 
 set "HOOK_NAME=%~1"
 set "SCRIPT=%~dp0%HOOK_NAME%.py"

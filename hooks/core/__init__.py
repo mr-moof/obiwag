@@ -38,6 +38,8 @@ _ATTR_SOURCES = {
     'load_patterns': '.pattern_matcher',
     'match_task_to_patterns': '.pattern_matcher',
     'get_injection_text': '.pattern_matcher',
+    'select_injections': '.pattern_matcher',
+    'render_injection': '.pattern_matcher',
     # Session state
     'SessionState': '.session_state',
     'get_session_state': '.session_state',
@@ -63,13 +65,6 @@ _ATTR_SOURCES = {
     'deserialize_learnings': '.learning_detector',
     # Paths
     'get_obiwag_repo_path': '.paths',
-    # Git sync
-    'PushStrategy': '.git_sync',
-    'SyncResult': '.git_sync',
-    'FileChange': '.git_sync',
-    'get_push_strategy': '.git_sync',
-    'sync_learnings': '.git_sync',
-    'format_sync_result': '.git_sync',
     # Quality signals
     'check_file_size': '.quality_signals',
     'find_edits_without_read': '.quality_signals',
@@ -115,6 +110,8 @@ __all__ = [
     'load_patterns',
     'match_task_to_patterns',
     'get_injection_text',
+    'select_injections',
+    'render_injection',
     # Session state
     'SessionState',
     'get_session_state',
@@ -138,14 +135,8 @@ __all__ = [
     'format_learnings_summary',
     'serialize_learnings',
     'deserialize_learnings',
-    # Git sync
-    'PushStrategy',
-    'SyncResult',
-    'FileChange',
+    # Paths
     'get_obiwag_repo_path',
-    'get_push_strategy',
-    'sync_learnings',
-    'format_sync_result',
     # Quality signals
     'check_file_size',
     'find_edits_without_read',

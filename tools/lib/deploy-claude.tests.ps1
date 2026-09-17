@@ -7,11 +7,15 @@
     command completeness, phase + orchestration deployment, settings backup,
     hook-path expansion, CLAUDE.md deployment, shared-permissions sync, and the
     full deployment simulation. Deployment-simulation cases exercise the REAL
-    Copy-SingleFile (dot-sourced below). Compatible with Pester 3.4.0+.
+    Copy-SingleFile (dot-sourced below). Requires Pester 5.
 #>
+BeforeAll {
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 . (Join-Path $PSScriptRoot 'deploy-common.ps1')
+. (Join-Path $PSScriptRoot 'deploy-claude.ps1')
+
+}
 
 Describe 'Deploy Claude Code' {
 
@@ -74,17 +78,14 @@ Describe 'Deploy Claude Code' {
         Set-Content (Join-Path $OrchDir 'obi.md') '# Obi orchestrator' -Encoding UTF8
         Set-Content (Join-Path $OrchDir 'obi-auto.md') '# Obi auto mode' -Encoding UTF8
         Set-Content (Join-Path $OrchDir 'obi-auto-max.md') '# Obi auto max mode' -Encoding UTF8
-        Set-Content (Join-Path $OrchUtilDir 'doc.md') '# Doc command' -Encoding UTF8
         Set-Content (Join-Path $OrchUtilDir 'obi-collect.md') '# Obi collect' -Encoding UTF8
         Set-Content (Join-Path $OrchUtilDir 'obi-memory-review.md') '# Memory review' -Encoding UTF8
         Set-Content (Join-Path $OrchUtilDir 'obi-update.md') '# Obi update' -Encoding UTF8
         Set-Content (Join-Path $OrchUtilDir 'obi-swarm.md') '# Obi swarm' -Encoding UTF8
-        Set-Content (Join-Path $OrchUtilDir 'fixissue.md') '# Fix issue' -Encoding UTF8
-        Set-Content (Join-Path $OrchUtilDir 'triage.md') '# Triage' -Encoding UTF8
         Set-Content (Join-Path $OrchAgentsDir 'obi-swarm-worker.md') '# Swarm worker' -Encoding UTF8
 
         $claudeAgentFiles = @(
-            'obi-wag.md', 'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
+            'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
             'obi-reviewer.md', 'obi-integrator.md', 'obi-rereviewer.md',
             'obi-readme.md', 'obi-readme-verifier.md', 'obi-release-gate.md',
             'obi-learner.md',
@@ -118,7 +119,7 @@ Describe 'Deploy Claude Code' {
             foreach ($input in $testCases.Keys) {
                 $expected = $testCases[$input]
                 $actual = $input -replace '^\d+-', ''
-                $actual | Should Be $expected
+                $actual | Should -Be $expected
             }
         }
     }
@@ -130,18 +131,18 @@ Describe 'Deploy Claude Code' {
             $agentFiles = (Get-ChildItem -Path $claudeAgentsSource -File -Filter '*.md' -ErrorAction SilentlyContinue).Name
 
             $requiredAgents = @(
-                'obi-wag.md', 'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
+                'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
                 'obi-reviewer.md', 'obi-integrator.md', 'obi-rereviewer.md',
                 'obi-readme.md', 'obi-readme-verifier.md', 'obi-release-gate.md',
                 'obi-learner.md',
                 'obi-pipeline-monitor.md', 'obi-swarm-worker.md'
             )
             $missing = $requiredAgents | Where-Object { $_ -notin $agentFiles }
-            $missing.Count | Should Be 0
+            $missing.Count | Should -Be 0
         }
 
         # Issue #163: delegated-phase agents are a SUBSET of installed agents. The full installed
-        # list (above) covers non-phase agents (obi-wag, obi-pipeline-monitor, obi-swarm-worker);
+        # list (above) covers non-phase agents (obi-pipeline-monitor, obi-swarm-worker);
         # this check additionally confirms every phase marked `delegated: true` in
         # phases/phase-table.json (OPT-10: promoted out of phases/README.md) has its agent installed.
         It 'Every delegated phase agent (from phases/phase-table.json) is in the installed set' {
@@ -163,22 +164,22 @@ Describe 'Deploy Claude Code' {
                 $table = Get-Content $tablePath -Raw -Encoding UTF8 | ConvertFrom-Json
                 $delegatedAgents = $table.phases | Where-Object { $_.delegated } | ForEach-Object { "$($_.agent).md" }
                 $missing = $delegatedAgents | Where-Object { $_ -notin $localAgentFiles }
-                $missing.Count | Should Be 0
+                $missing.Count | Should -Be 0
             }
         }
     }
 
     Context 'Required Commands Completeness' {
 
-        It 'Lists exactly 20 required commands' {
+        It 'Lists exactly 17 required commands' {
             $requiredCommands = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+                'author.md', 'discovery.md', 'integrate.md',
                 'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
                 'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
                 'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
+                'simplify.md'
             )
-            $requiredCommands.Count | Should Be 20
+            $requiredCommands.Count | Should -Be 17
         }
 
         It 'Includes all 10 phase commands' {
@@ -188,33 +189,33 @@ Describe 'Deploy Claude Code' {
                 're-review.md', 'review.md', 'simplify.md'
             )
             $requiredCommands = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+                'author.md', 'discovery.md', 'integrate.md',
                 'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
                 'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
                 'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
+                'simplify.md'
             )
 
             foreach ($cmd in $phaseCommands) {
-                ($requiredCommands -contains $cmd) | Should Be $true
+                ($requiredCommands -contains $cmd) | Should -Be $true
             }
         }
 
         It 'Includes all orchestration commands' {
             $orchCommands = @(
                 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
-                'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'doc.md'
+                'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md'
             )
             $requiredCommands = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+                'author.md', 'discovery.md', 'integrate.md',
                 'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
                 'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
                 'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
+                'simplify.md'
             )
 
             foreach ($cmd in $orchCommands) {
-                ($requiredCommands -contains $cmd) | Should Be $true
+                ($requiredCommands -contains $cmd) | Should -Be $true
             }
         }
 
@@ -226,9 +227,9 @@ Describe 'Deploy Claude Code' {
                 $phaseCommandMap[$phase] = $cmdName
             }
 
-            $phaseCommandMap.Count | Should Be 10
-            $phaseCommandMap['01-discovery'] | Should Be 'discovery.md'
-            $phaseCommandMap['10-learning'] | Should Be 'learning.md'
+            $phaseCommandMap.Count | Should -Be 10
+            $phaseCommandMap['01-discovery'] | Should -Be 'discovery.md'
+            $phaseCommandMap['10-learning'] | Should -Be 'learning.md'
         }
     }
 
@@ -240,7 +241,7 @@ Describe 'Deploy Claude Code' {
                 'obi-rereviewer.md', 'obi-readme-verifier.md',
                 'obi-swarm-worker.md'
             )
-            $requiredAgents.Count | Should Be 5
+            $requiredAgents.Count | Should -Be 5
         }
 
         It 'Includes 4 phase agents plus swarm worker' {
@@ -249,11 +250,11 @@ Describe 'Deploy Claude Code' {
                 'obi-rereviewer.md', 'obi-readme-verifier.md',
                 'obi-swarm-worker.md'
             )
-            ($requiredAgents -contains 'obi-discovery.md') | Should Be $true
-            ($requiredAgents -contains 'obi-reviewer.md') | Should Be $true
-            ($requiredAgents -contains 'obi-rereviewer.md') | Should Be $true
-            ($requiredAgents -contains 'obi-readme-verifier.md') | Should Be $true
-            ($requiredAgents -contains 'obi-swarm-worker.md') | Should Be $true
+            ($requiredAgents -contains 'obi-discovery.md') | Should -Be $true
+            ($requiredAgents -contains 'obi-reviewer.md') | Should -Be $true
+            ($requiredAgents -contains 'obi-rereviewer.md') | Should -Be $true
+            ($requiredAgents -contains 'obi-readme-verifier.md') | Should -Be $true
+            ($requiredAgents -contains 'obi-swarm-worker.md') | Should -Be $true
         }
     }
 
@@ -268,10 +269,10 @@ Describe 'Deploy Claude Code' {
             }
 
             $deployed = (Get-ChildItem $CommandsTarget -Filter '*.md').Name
-            $deployed.Count | Should Be 10
-            ($deployed -contains 'discovery.md') | Should Be $true
-            ($deployed -contains 'learning.md') | Should Be $true
-            ($deployed -contains 're-review.md') | Should Be $true
+            $deployed.Count | Should -Be 10
+            ($deployed -contains 'discovery.md') | Should -Be $true
+            ($deployed -contains 'learning.md') | Should -Be $true
+            ($deployed -contains 're-review.md') | Should -Be $true
         }
 
         It 'Deploys Claude Code agents from static directory' {
@@ -282,11 +283,11 @@ Describe 'Deploy Claude Code' {
             }
 
             $deployed = (Get-ChildItem $AgentsTarget -Filter '*.md').Name
-            $deployed.Count | Should Be 13
-            ($deployed -contains 'obi-discovery.md') | Should Be $true
-            ($deployed -contains 'obi-reviewer.md') | Should Be $true
-            ($deployed -contains 'obi-wag.md') | Should Be $true
-            ($deployed -contains 'obi-author.md') | Should Be $true
+            $deployed.Count | Should -Be 12
+            ($deployed -contains 'obi-discovery.md') | Should -Be $true
+            ($deployed -contains 'obi-reviewer.md') | Should -Be $true
+            ($deployed -contains 'obi-pipeline-monitor.md') | Should -Be $true
+            ($deployed -contains 'obi-author.md') | Should -Be $true
         }
     }
 
@@ -298,8 +299,8 @@ Describe 'Deploy Claude Code' {
                 Copy-SingleFile -Source $f.FullName -Destination $dst | Out-Null
             }
 
-            (Test-Path (Join-Path $CommandsTarget 'obi.md')) | Should Be $true
-            (Test-Path (Join-Path $CommandsTarget 'obi-auto.md')) | Should Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi.md')) | Should -Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi-auto.md')) | Should -Be $true
         }
 
         It 'Deploys utility commands' {
@@ -308,10 +309,10 @@ Describe 'Deploy Claude Code' {
                 Copy-SingleFile -Source $f.FullName -Destination $dst | Out-Null
             }
 
-            (Test-Path (Join-Path $CommandsTarget 'obi-collect.md')) | Should Be $true
-            (Test-Path (Join-Path $CommandsTarget 'obi-memory-review.md')) | Should Be $true
-            (Test-Path (Join-Path $CommandsTarget 'obi-update.md')) | Should Be $true
-            (Test-Path (Join-Path $CommandsTarget 'obi-swarm.md')) | Should Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi-collect.md')) | Should -Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi-memory-review.md')) | Should -Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi-update.md')) | Should -Be $true
+            (Test-Path (Join-Path $CommandsTarget 'obi-swarm.md')) | Should -Be $true
         }
 
         It 'Deploys orchestration agents' {
@@ -320,11 +321,32 @@ Describe 'Deploy Claude Code' {
                 Copy-SingleFile -Source $f.FullName -Destination $dst | Out-Null
             }
 
-            (Test-Path (Join-Path $AgentsTarget 'obi-swarm-worker.md')) | Should Be $true
+            (Test-Path (Join-Path $AgentsTarget 'obi-swarm-worker.md')) | Should -Be $true
         }
     }
 
     Context 'Settings Backup' {
+
+        It 'executes the production one-time backup helper before overwrite' {
+            $settingsTarget = Join-Path $ClaudeTarget 'settings.json'
+            $backupPath = "$settingsTarget.backup"
+            Set-Content -LiteralPath $settingsTarget -Value '{"user_original":true}' -Encoding UTF8 -NoNewline
+
+            Protect-ClaudeSettingsBackup -SettingsTarget $settingsTarget
+            Set-Content -LiteralPath $settingsTarget -Value '{"obi_v1":true}' -Encoding UTF8 -NoNewline
+            Protect-ClaudeSettingsBackup -SettingsTarget $settingsTarget
+
+            (Get-Content -LiteralPath $backupPath -Raw).TrimStart([char]0xFEFF) | Should -Be '{"user_original":true}'
+        }
+
+        It 'does not create the one-time settings backup during DryRun' {
+            $settingsTarget = Join-Path $ClaudeTarget 'settings.json'
+            Set-Content -LiteralPath $settingsTarget -Value '{"user_original":true}' -Encoding UTF8 -NoNewline
+
+            Protect-ClaudeSettingsBackup -SettingsTarget $settingsTarget -DryRun
+
+            Test-Path -LiteralPath "$settingsTarget.backup" | Should -BeFalse
+        }
 
         It 'Creates backup before overwriting settings.json' {
             $settingsTarget = Join-Path $ClaudeTarget 'settings.json'
@@ -333,8 +355,8 @@ Describe 'Deploy Claude Code' {
             $backupPath = "$settingsTarget.backup"
             Copy-Item -Path $settingsTarget -Destination $backupPath -Force
 
-            (Test-Path $backupPath) | Should Be $true
-            (Get-Content $backupPath -Raw) | Should Match '"original"'
+            (Test-Path $backupPath) | Should -Be $true
+            (Get-Content $backupPath -Raw) | Should -Match '"original"'
         }
 
         It 'Preserves backup content after overwrite' {
@@ -347,8 +369,8 @@ Describe 'Deploy Claude Code' {
             # Overwrite settings
             Set-Content $settingsTarget '{"new": true}' -Encoding UTF8
 
-            (Get-Content $backupPath -Raw) | Should Match '"original"'
-            (Get-Content $settingsTarget -Raw) | Should Match '"new"'
+            (Get-Content $backupPath -Raw) | Should -Match '"original"'
+            (Get-Content $settingsTarget -Raw) | Should -Match '"new"'
         }
 
         It 'settings.json.backup is created once and preserved across deploys (#168)' {
@@ -374,9 +396,39 @@ Describe 'Deploy Claude Code' {
             }
             Set-Content $settingsTarget '{"obi_v2": true}' -Encoding UTF8
 
-            (Get-Content $backupPath -Raw) | Should Match '"user_original"'
-            (Get-Content $backupPath -Raw) | Should Not Match '"obi_v1"'
-            (Get-Content $backupPath -Raw) | Should Not Match '"obi_v2"'
+            (Get-Content $backupPath -Raw) | Should -Match '"user_original"'
+            (Get-Content $backupPath -Raw) | Should -Not -Match '"obi_v1"'
+            (Get-Content $backupPath -Raw) | Should -Not -Match '"obi_v2"'
+        }
+    }
+
+    Context 'Config Guardian gate' {
+
+        It 'records a deploy failure when Config Guardian exits nonzero' {
+            $guardian = Join-Path $TempRoot 'guardian-fail.ps1'
+            Set-Content -LiteralPath $guardian -Value 'exit 7' -Encoding UTF8 -NoNewline
+
+            $passed = Invoke-ClaudeConfigGuardian -GuardianScript $guardian -RepoRoot $RepoRoot
+
+            $passed | Should -BeFalse
+            $script:deployFailures.Count | Should -Be 1
+            $script:deployFailures[0].Stage | Should -Be 'ConfigGuardian'
+            $script:deployFailures[0].Detail | Should -Be 'Exited with code 7'
+        }
+
+        It 'accepts a zero Config Guardian exit without adding a failure' {
+            $guardian = Join-Path $TempRoot 'guardian-pass.ps1'
+            Set-Content -LiteralPath $guardian -Value 'exit 0' -Encoding UTF8 -NoNewline
+
+            $passed = Invoke-ClaudeConfigGuardian -GuardianScript $guardian -RepoRoot $RepoRoot
+
+            $passed | Should -BeTrue
+            $script:deployFailures.Count | Should -Be 0
+        }
+
+        It 'does not register the OBI_HOME phase table in the Claude-root manifest' {
+            $source = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'deploy-claude.ps1') -Raw
+            $source | Should -Not -Match "Add-ManifestEntry\s+'phases/phase-table\.json'"
         }
     }
 
@@ -386,16 +438,16 @@ Describe 'Deploy Claude Code' {
             $cmd = '"%USERPROFILE%\.claude\hooks\hook_wrapper.cmd" session_start'
             $expanded = $cmd -replace '%USERPROFILE%', $HomeDir
 
-            $expanded | Should Match ([regex]::Escape($HomeDir))
-            $expanded | Should Not Match '%USERPROFILE%'
+            $expanded | Should -Match ([regex]::Escape($HomeDir))
+            $expanded | Should -Not -Match '%USERPROFILE%'
         }
 
         It 'Expands $HOME in hook commands' {
             $cmd = '"$HOME/.claude/hooks/hook_wrapper.cmd" session_start'
             $expanded = $cmd -replace '\$HOME', $HomeDir
 
-            $expanded | Should Match ([regex]::Escape($HomeDir))
-            $expanded | Should Not Match '\$HOME'
+            $expanded | Should -Match ([regex]::Escape($HomeDir))
+            $expanded | Should -Not -Match '\$HOME'
         }
 
         It 'Extracts script path from hook command' {
@@ -403,7 +455,7 @@ Describe 'Deploy Claude Code' {
             $hookCmd -match '"([^"]+\.(cmd|ps1|py))"' | Out-Null
             $scriptPath = $Matches[1]
 
-            $scriptPath | Should Be 'C:/Users/test/.claude/hooks/hook_wrapper.cmd'
+            $scriptPath | Should -Be 'C:/Users/test/.claude/hooks/hook_wrapper.cmd'
         }
 
         It 'Extracts Python script path' {
@@ -412,219 +464,24 @@ Describe 'Deploy Claude Code' {
             $hookCmd -match '"([^"]+\.py)"' | Out-Null
             $scriptPath = $Matches[1]
 
-            $scriptPath | Should Be 'C:/Users/test/.claude/hooks/session_start.py'
+            $scriptPath | Should -Be 'C:/Users/test/.claude/hooks/session_start.py'
         }
     }
 
     Context 'CLAUDE.md Deployment' {
 
-        It 'Copies CLAUDE.md to target' {
-            $src = Join-Path $RepoRoot 'CLAUDE.md'
+        It 'Copies the global CLAUDE.md source to target' {
+            $srcDir = Join-Path $RepoRoot 'platforms\claude-code'
+            New-Item -ItemType Directory -Path $srcDir -Force | Out-Null
+            $src = Join-Path $srcDir 'CLAUDE.global.md'
             Set-Content $src '# Obi Wag' -Encoding UTF8
 
             $dst = Join-Path $ClaudeTarget 'CLAUDE.md'
             Copy-SingleFile -Source $src -Destination $dst | Out-Null
 
-            (Test-Path $dst) | Should Be $true
-            (Get-Content $dst) | Should Be '# Obi Wag'
+            (Test-Path $dst) | Should -Be $true
+            (Get-Content $dst) | Should -Be '# Obi Wag'
         }
     }
 
-    Context 'Shared Permissions Sync (Issue 74)' {
-
-        It 'Merges shared and existing permissions with deduplication' {
-            $sharedAllows = @('Bash(start:*)', 'Bash(where.exe:*)', 'WebSearch')
-            $existingAllows = @('Bash(start:*)', 'mcp__example__search_kbs')
-
-            $merged = @($sharedAllows + $existingAllows | Select-Object -Unique | Sort-Object)
-
-            $merged.Count | Should Be 4
-            ($merged -contains 'Bash(start:*)') | Should Be $true
-            ($merged -contains 'Bash(where.exe:*)') | Should Be $true
-            ($merged -contains 'WebSearch') | Should Be $true
-            ($merged -contains 'mcp__example__search_kbs') | Should Be $true
-        }
-
-        It 'Preserves _managed_by marker in output' {
-            $outputObj = @{
-                '_managed_by' = 'obi-deploy'
-                'permissions' = @{
-                    'allow' = @('Bash(start:*)', 'WebSearch')
-                }
-            }
-
-            $outputObj._managed_by | Should Be 'obi-deploy'
-            $outputObj.permissions.allow.Count | Should Be 2
-        }
-
-        It 'Creates settings.local.json with shared allows when none exists' {
-            $projectDir = Join-Path $TempRoot 'testproject'
-            $claudeDir = Join-Path $projectDir '.claude'
-            New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-
-            $sharedAllows = @('Bash(start:*)', 'WebSearch')
-            $merged = @($sharedAllows | Select-Object -Unique | Sort-Object)
-
-            $outputObj = @{
-                '_managed_by' = 'obi-deploy'
-                'permissions' = @{ 'allow' = $merged }
-            }
-
-            $localPath = Join-Path $claudeDir 'settings.local.json'
-            $outputObj | ConvertTo-Json -Depth 5 | Set-Content $localPath -Encoding UTF8
-
-            $result = Get-Content $localPath -Raw | ConvertFrom-Json
-            $result._managed_by | Should Be 'obi-deploy'
-            $result.permissions.allow.Count | Should Be 2
-        }
-
-        It 'Skips unparseable existing settings.local.json' {
-            $projectDir = Join-Path $TempRoot 'badproject'
-            $claudeDir = Join-Path $projectDir '.claude'
-            New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-
-            $localPath = Join-Path $claudeDir 'settings.local.json'
-            Set-Content $localPath '{ not valid json' -Encoding UTF8
-
-            $parseable = $true
-            try {
-                $null = Get-Content $localPath -Raw | ConvertFrom-Json
-            } catch {
-                $parseable = $false
-            }
-
-            $parseable | Should Be $false
-        }
-
-        It 'Never removes existing local entries (additive only)' {
-            $sharedAllows = @('Bash(start:*)')
-            $existingAllows = @('mcp__example__search_kbs', 'Bash(gopls version:*)')
-
-            $merged = @($sharedAllows + $existingAllows | Select-Object -Unique | Sort-Object)
-
-            # All existing entries must still be present
-            ($merged -contains 'mcp__example__search_kbs') | Should Be $true
-            ($merged -contains 'Bash(gopls version:*)') | Should Be $true
-            ($merged -contains 'Bash(start:*)') | Should Be $true
-        }
-
-        It '-SyncProjectPermissions default-off path leaves project files untouched (#170)' {
-            # Reproduce the default-off branch of the sync loop. With
-            # $SyncProjectPermissions = $false, the merge is computed but
-            # the file is NOT written. Sentinel project file content is
-            # unchanged after the discovery scan.
-            $SyncProjectPermissions = $false  # the locked default for #170
-
-            $projDir = Join-Path $TempRoot 'source\proj-sample'
-            $claudeDir = Join-Path $projDir '.claude'
-            New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-
-            $localPath = Join-Path $claudeDir 'settings.local.json'
-            $userOriginal = '{"permissions":{"allow":["Bash(my-tool:*)"]}}'
-            Set-Content $localPath $userOriginal -Encoding UTF8 -NoNewline
-
-            $sharedAllows = @('Bash(obi-shared:*)')
-            $existing = Get-Content $localPath -Raw | ConvertFrom-Json
-            $existingAllows = @($existing.permissions.allow)
-            $merged = @($sharedAllows + $existingAllows | Select-Object -Unique | Sort-Object)
-
-            # Reproduce the deploy.ps1 default-off branch
-            if (-not $SyncProjectPermissions) {
-                # Default branch: report and skip write
-                $previewCount = 1
-            } else {
-                $outputObj = @{ '_managed_by' = 'obi-deploy'; 'permissions' = @{ 'allow' = $merged } }
-                $outputObj | ConvertTo-Json -Depth 5 | Set-Content $localPath -Encoding UTF8
-            }
-
-            # User's pre-existing settings.local.json is unchanged
-            (Get-Content $localPath -Raw).Trim() | Should Be $userOriginal
-            $previewCount | Should Be 1
-        }
-
-        It '-SyncProjectPermissions opt-in path writes the merged permissions (#170)' {
-            # The complementary path: with the flag set, the existing
-            # sync logic runs and the file IS written.
-            $SyncProjectPermissions = $true
-
-            $projDir = Join-Path $TempRoot 'source\proj-sample-2'
-            $claudeDir = Join-Path $projDir '.claude'
-            New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-
-            $localPath = Join-Path $claudeDir 'settings.local.json'
-            $userOriginal = '{"permissions":{"allow":["Bash(my-tool:*)"]}}'
-            Set-Content $localPath $userOriginal -Encoding UTF8 -NoNewline
-
-            $sharedAllows = @('Bash(obi-shared:*)')
-            $existing = Get-Content $localPath -Raw | ConvertFrom-Json
-            $existingAllows = @($existing.permissions.allow)
-            $merged = @($sharedAllows + $existingAllows | Select-Object -Unique | Sort-Object)
-
-            if ($SyncProjectPermissions) {
-                $outputObj = @{ '_managed_by' = 'obi-deploy'; 'permissions' = @{ 'allow' = $merged } }
-                $outputObj | ConvertTo-Json -Depth 5 | Set-Content $localPath -Encoding UTF8
-            }
-
-            $written = Get-Content $localPath -Raw | ConvertFrom-Json
-            $written._managed_by | Should Be 'obi-deploy'
-            $written.permissions.allow.Count | Should Be 2
-        }
-    }
-
-    Context 'Full Deployment Simulation' {
-
-        It 'Deploys all 20 commands from phases + orchestration' {
-            # Deploy phase commands
-            foreach ($phase in $PhaseNames) {
-                $cmdName = ($phase -replace '^\d+-', '') + '.md'
-                $src = Join-Path (Join-Path $PhasesDir $phase) 'command.md'
-                $dst = Join-Path $CommandsTarget $cmdName
-                Copy-SingleFile -Source $src -Destination $dst | Out-Null
-            }
-
-            # Deploy orchestration commands
-            foreach ($f in (Get-ChildItem $OrchDir -File -Filter '*.md')) {
-                Copy-SingleFile -Source $f.FullName -Destination (Join-Path $CommandsTarget $f.Name) | Out-Null
-            }
-            foreach ($f in (Get-ChildItem $OrchUtilDir -File -Filter '*.md')) {
-                Copy-SingleFile -Source $f.FullName -Destination (Join-Path $CommandsTarget $f.Name) | Out-Null
-            }
-
-            # Need doc.md too (from skills or special location)
-            Set-Content (Join-Path $CommandsTarget 'doc.md') '# Doc command' -Encoding UTF8
-
-            $requiredCommands = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
-                'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
-                'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
-                'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
-            )
-
-            $installed = (Get-ChildItem "$CommandsTarget\*.md" -ErrorAction SilentlyContinue).Name
-            $missing = $requiredCommands | Where-Object { $_ -notin $installed }
-
-            $missing.Count | Should Be 0
-        }
-
-        It 'Deploys all 13 agents from platforms/claude-code/agents/' {
-            $claudeAgentsSource = Join-Path $PlatformsDir 'claude-code\agents'
-            Get-ChildItem -Path $claudeAgentsSource -File -Filter '*.md' | ForEach-Object {
-                $dst = Join-Path $AgentsTarget $_.Name
-                Copy-SingleFile -Source $_.FullName -Destination $dst | Out-Null
-            }
-
-            $requiredAgents = @(
-                'obi-wag.md', 'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
-                'obi-reviewer.md', 'obi-integrator.md', 'obi-rereviewer.md',
-                'obi-readme.md', 'obi-readme-verifier.md', 'obi-release-gate.md',
-                'obi-learner.md',
-                'obi-pipeline-monitor.md', 'obi-swarm-worker.md'
-            )
-            $installedAgents = (Get-ChildItem "$AgentsTarget\*.md" -ErrorAction SilentlyContinue).Name
-            $missingAgents = $requiredAgents | Where-Object { $_ -notin $installedAgents }
-
-            $missingAgents.Count | Should Be 0
-        }
-    }
 }

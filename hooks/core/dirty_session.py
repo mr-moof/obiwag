@@ -9,28 +9,34 @@ import subprocess
 from typing import List, Dict, Optional
 
 
-def _run_git_status(repo_path: str) -> Optional[subprocess.CompletedProcess]:
+def _run_git_status(
+    repo_path: str,
+    timeout_seconds: float = 2.5,
+) -> Optional[subprocess.CompletedProcess]:
     try:
         result = subprocess.run(
             ["git", "-C", repo_path, "status", "--porcelain"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=max(0.1, min(float(timeout_seconds), 2.5)),
         )
         return result if result.returncode == 0 else None
     except Exception:
         return None
 
 
-def is_repo_dirty(repo_path: str) -> bool:
+def is_repo_dirty(repo_path: str, timeout_seconds: float = 2.5) -> bool:
     """Return True if the working tree has any uncommitted or untracked changes."""
-    result = _run_git_status(repo_path)
+    result = _run_git_status(repo_path, timeout_seconds)
     return result is not None and bool(result.stdout.strip())
 
 
-def get_dirty_file_list(repo_path: str) -> List[Dict[str, str]]:
+def get_dirty_file_list(
+    repo_path: str,
+    timeout_seconds: float = 2.5,
+) -> List[Dict[str, str]]:
     """Parse ``git status --porcelain`` into a list of {status, path} dicts."""
-    result = _run_git_status(repo_path)
+    result = _run_git_status(repo_path, timeout_seconds)
     if result is None or not result.stdout.strip():
         return []
 

@@ -5,10 +5,11 @@ Always return this exact format:
 ```
 ## Review Verdict: PASS | FAIL
 
-### Codex First-Pass
-- Status: ran | unavailable
-- Codex pass: ran | unavailable
-- Summary: <1-3 sentence digest of what Codex raised>
+### Peer First-Pass
+- Provider: Codex | Claude | unavailable
+- Transport: completed | unavailable | timed_out | idle_killed | output_limit | error | launch_error
+- Validation: valid | partial | invalid | not_run
+- Summary: <1-3 sentence digest of accepted peer findings, limitations, or unavailability>
 
 ### Spec Compliance
 - [ ] All requested features implemented
@@ -30,16 +31,16 @@ Always return this exact format:
 - [ ] Naming follows conventions
 
 ### Critical Faults
-- [Codex|Claude|Synthesis] <blocker description>
+- [Peer: Codex|Peer: Claude|Primary|Synthesis] <blocker description>
 
 ### Required Fixes
-- [Codex|Claude|Synthesis] <must-fix description>
+- [Peer: Codex|Peer: Claude|Primary|Synthesis] <must-fix description>
 
 ### Optional Improvements
-- [Codex|Claude|Synthesis] <nice-to-have description>
+- [Peer: Codex|Peer: Claude|Primary|Synthesis] <nice-to-have description>
 
-### Disputed Codex Findings
-- [Codex — disputed] <original finding> — rebuttal: <why Claude disagrees>
+### Disputed Peer Findings
+- [Peer — disputed] <original finding> — rebuttal: <why the primary reviewer disagrees>
 ```
 
-Every entry in Critical Faults, Required Fixes, and Optional Improvements MUST carry an attribution tag. `Disputed Codex Findings` stays in output even when empty (show `- (none)`).
+Every entry in Critical Faults, Required Fixes, and Optional Improvements MUST carry an attribution tag. `Disputed Peer Findings` stays in output even when empty (show `- (none)`). Never attribute a rejected or unvalidated peer claim as a finding.

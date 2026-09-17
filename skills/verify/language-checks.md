@@ -40,7 +40,7 @@ Invoke-ScriptAnalyzer -Path <module> -Recurse   # If PSScriptAnalyzer available
 - Pester 3.4 lacks: `Should -Invoke`, `Should -InvokeVerifiable`, `InModuleScope` with `-Parameters`, `| Should -Be` pipeline syntax
 - Use `Assert-MockCalled` instead of `Should -Invoke`
 - Use `Should Be` (v3) not `Should -Be` (v5)
-- `-ErrorAction Stop` with some vendor SDK cmdlets turns benign warnings into terminating errors and kills pipelines — use `2>$null` instead
+- `-ErrorAction Stop` with CanvasAPI SDK cmdlets kills pipelines — use `2>$null` instead
 - For complex PS commands through Bash, write a `.ps1` helper and call with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script>`
 
 ## Node.js / TypeScript

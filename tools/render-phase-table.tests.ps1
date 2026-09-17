@@ -2,10 +2,11 @@
 .SYNOPSIS
     Pester tests for tools/render-phase-table.ps1 (OPT-10 phase-table renderer).
 #>
+BeforeAll {
 
-# Pester 3.4 compatible (PS 5.1 workstation default)
+# Requires Pester 5 (see .obi/runtime/run-pester5.ps1)
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir  = $PSScriptRoot
 $Renderer  = Join-Path $ScriptDir 'render-phase-table.ps1'
 $RealRepo  = Split-Path -Parent $ScriptDir
 
@@ -44,15 +45,17 @@ function New-FixtureRepo {
     return $repo
 }
 
+}
+
 Describe 'render-phase-table.ps1' {
 
     It 'DryRun emits the header (with Lanes column) and one row per phase' {
         $repo = New-FixtureRepo 'dryrun'
         $out = (& $Renderer -RepoRoot $repo -DryRun) -join "`n"
-        $out | Should Match '\| # \| Phase \| Command \|'
-        $out | Should Match '\| Lanes \|'
-        $out | Should Match '\| 1 \| \*\*Discovery\*\* \|'
-        $out | Should Match '\| 6 \| \*\*Re-review\*\* \|'
+        $out | Should -Match '\| # \| Phase \| Command \|'
+        $out | Should -Match '\| Lanes \|'
+        $out | Should -Match '\| 1 \| \*\*Discovery\*\* \|'
+        $out | Should -Match '\| 6 \| \*\*Re-review\*\* \|'
     }
 
     It 'renders an em-dash (U+2014) for the null recipe cell' {
@@ -60,16 +63,16 @@ Describe 'render-phase-table.ps1' {
         $out = (& $Renderer -RepoRoot $repo -DryRun) -join "`n"
         $emDash = [char]0x2014
         # Discovery has a null recipe -> em-dash in its recipe cell.
-        ($out -split "`n" | Where-Object { $_ -match '^\| 1 \|' }) | Should Match $emDash
+        ($out -split "`n" | Where-Object { $_ -match '^\| 1 \|' }) | Should -Match $emDash
     }
 
     It 'renders lane membership initials and leaves verdict-in-body note intact' {
         $repo = New-FixtureRepo 'lanes'
         $out = (& $Renderer -RepoRoot $repo -DryRun) -join "`n"
         # Phase 1 is in express/standard/max -> "E S M"; phase 6 only standard/max -> "S M".
-        ($out -split "`n" | Where-Object { $_ -match '^\| 1 \|' }) | Should Match 'E S M'
-        ($out -split "`n" | Where-Object { $_ -match '^\| 6 \|' }) | Should Match '\| S M \|'
-        $out | Should Match '`RE-REVIEW COMPLETE` \(verdict in body\)'
+        ($out -split "`n" | Where-Object { $_ -match '^\| 1 \|' }) | Should -Match 'E S M'
+        ($out -split "`n" | Where-Object { $_ -match '^\| 6 \|' }) | Should -Match '\| S M \|'
+        $out | Should -Match '`RE-REVIEW COMPLETE` \(verdict in body\)'
     }
 
     It 'is idempotent: rendering twice yields an identical README' {
@@ -78,14 +81,14 @@ Describe 'render-phase-table.ps1' {
         $first = [System.IO.File]::ReadAllText("$repo\phases\README.md")
         & $Renderer -RepoRoot $repo | Out-Null
         $second = [System.IO.File]::ReadAllText("$repo\phases\README.md")
-        $second | Should Be $first
+        $second | Should -Be $first
     }
 
     It 'Verify exits 0 immediately after a render' {
         $repo = New-FixtureRepo 'verifyok'
         & $Renderer -RepoRoot $repo | Out-Null
         & $Renderer -RepoRoot $repo -Verify
-        $LASTEXITCODE | Should Be 0
+        $LASTEXITCODE | Should -Be 0
     }
 
     It 'Verify exits 1 when the table is out of sync' {
@@ -95,11 +98,20 @@ Describe 'render-phase-table.ps1' {
         $c = [System.IO.File]::ReadAllText($readmePath) -replace 'Discovery', 'Drifted'
         [System.IO.File]::WriteAllText($readmePath, $c, $Utf8NoBom)
         & $Renderer -RepoRoot $repo -Verify
-        $LASTEXITCODE | Should Be 1
+        $LASTEXITCODE | Should -Be 1
     }
 
     It 'keeps the production phases/README.md in sync with phase-table.json' {
         & $Renderer -RepoRoot $RealRepo -Verify
-        $LASTEXITCODE | Should Be 0
+        $LASTEXITCODE | Should -Be 0
+    }
+
+    It 'production Phase 5 declares the guarded no-op signal and skips only Re-review' {
+        $table = Get-Content -LiteralPath (Join-Path $RealRepo 'phases\phase-table.json') -Raw | ConvertFrom-Json
+        $phase5 = @($table.phases | Where-Object { $_.n -eq 5 })[0]
+        @($phase5.special_signals.value) | Should -Contain 'INTEGRATE NO-OP:'
+        $transition = @($phase5.transitions | Where-Object { $_.on_signal -eq 'INTEGRATE NO-OP:' })[0]
+        $transition.match_mode | Should -Be 'prefix'
+        @($transition.skip) | Should -Be @(6)
     }
 }

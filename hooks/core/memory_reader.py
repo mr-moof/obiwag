@@ -260,6 +260,43 @@ def log_correction(
     filename = f"{date_str}.jsonl"
     filepath = os.path.join(corrections_path, filename)
 
+    # Scan and append under one lock, so two Stop processes finishing at the same
+    # moment cannot both scan, both miss, and both append the same correction.
+    # Imported lazily: session_state imports this module, so a module-level
+    # import would be circular.
+    from .session_state import StateUnavailable, _file_lock
+
+    try:
+        with _file_lock(filepath + '.lock'):
+            _append_correction_if_new(filepath, user_message, correction_type,
+                                      auto_classify, session_id, task_type,
+                                      source_cited, tool_corrected, tool_calls_before)
+    except StateUnavailable:
+        # Lock busy past its budget. This path is NOT atomic -- the holder can
+        # append the same text after we do, producing a duplicate. That is the
+        # accepted cost: a duplicate is recoverable, a lost correction is not.
+        _append_correction_if_new(filepath, user_message, correction_type,
+                                  auto_classify, session_id, task_type,
+                                  source_cited, tool_corrected, tool_calls_before)
+
+
+def _append_correction_if_new(
+    filepath: str,
+    user_message: str,
+    correction_type: str,
+    auto_classify: bool,
+    session_id: str,
+    task_type: str,
+    source_cited: Optional[str],
+    tool_corrected: Optional[str],
+    tool_calls_before: Optional[int],
+) -> None:
+    """Dedupe-check and append. Caller holds the lock (see log_correction)."""
+    # Checked before classifying: classify_correction runs a regex sweep, and on
+    # a duplicate every bit of that work is discarded.
+    if _correction_already_logged(filepath, user_message):
+        return
+
     # Auto-classify if needed
     final_correction_type = correction_type
     if auto_classify and (not correction_type or correction_type in ('auto', 'unknown')):
@@ -283,6 +320,54 @@ def log_correction(
 
     from .jsonl_helper import append_jsonl
     append_jsonl(filepath, entry)
+
+
+def _correction_already_logged(filepath: str, user_message: str) -> bool:
+    """True if this exact correction text is already in today's file.
+
+    Stop re-analyzes the whole transcript on every firing, and a correction stays
+    in the transcript for the rest of the session -- and into later sessions once
+    compaction carries it forward -- so without this the same message is appended
+    once per analysis.
+
+    Scoped to the current day's file: it is the unit already being appended to, it
+    bounds the read, and a correction genuinely repeated on a later day is signal
+    worth keeping.
+
+    FAILS OPEN. Every failure path returns False (log it) rather than raising,
+    because losing a real correction is worse than storing a duplicate. That
+    covers more than I/O errors: a log holding invalid UTF-8, JSON scalars or
+    lists instead of objects, or a non-string ``user_message`` will otherwise
+    raise UnicodeDecodeError/AttributeError out of this helper and take the
+    correction down with it.
+    """
+    if not user_message or not os.path.exists(filepath):
+        return False
+
+    needle = ' '.join(str(user_message).split())
+    try:
+        # errors='replace': invalid UTF-8 in the log must not raise. A mangled
+        # line simply will not compare equal, so it degrades to "not a duplicate".
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    prior = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(prior, dict):
+                    continue  # a scalar or list line is not a correction record
+                prior_msg = prior.get('user_message')
+                if not isinstance(prior_msg, str):
+                    continue
+                if ' '.join(prior_msg.split()) == needle:
+                    return True
+    except Exception:  # noqa: BLE001 - never let a bad log discard a correction
+        return False
+
+    return False
 
 
 def read_grounding_log(days: int = 7) -> List[Dict[str, Any]]:

@@ -11,7 +11,16 @@ import pytest
 TOOLS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(TOOLS_DIR))
 
-from swarm_merge import get_changed_files, detect_overlaps, try_merge, merge_batch, run_git
+import swarm_merge
+from swarm_merge import (
+    GitCommandError,
+    detect_overlaps,
+    get_default_branch,
+    get_changed_files,
+    merge_batch,
+    run_git,
+    try_merge,
+)
 
 
 def _git(repo_path: str, *args: str):
@@ -23,10 +32,10 @@ def _git(repo_path: str, *args: str):
 
 
 def _init_repo(tmp_path: Path) -> str:
-    """Create a test git repo with an initial commit on master."""
+    """Create a test git repo with an initial commit on main."""
     repo = str(tmp_path / 'test-repo')
     os.makedirs(repo)
-    _git(repo, 'init', '-b', 'master')
+    _git(repo, 'init', '-b', 'main')
     _git(repo, 'config', 'user.email', 'test@test.local')
     _git(repo, 'config', 'user.name', 'Test')
 
@@ -47,14 +56,14 @@ def _create_branch_with_changes(repo: str, branch: str, file_changes: dict):
         branch: Branch name.
         file_changes: Dict mapping filename to content.
     """
-    _git(repo, 'checkout', '-b', branch, 'master')
+    _git(repo, 'checkout', '-b', branch, 'main')
     for filename, content in file_changes.items():
         filepath = Path(repo) / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content)
     _git(repo, 'add', '.')
     _git(repo, 'commit', '-m', f'Changes on {branch}')
-    _git(repo, 'checkout', 'master')
+    _git(repo, 'checkout', 'main')
 
 
 class TestGetChangedFiles:
@@ -82,17 +91,33 @@ class TestGetChangedFiles:
     def test_no_changes(self, tmp_path):
         """Branch with no changes returns empty set."""
         repo = _init_repo(tmp_path)
-        _git(repo, 'checkout', '-b', 'empty-branch', 'master')
-        _git(repo, 'checkout', 'master')
+        _git(repo, 'checkout', '-b', 'empty-branch', 'main')
+        _git(repo, 'checkout', 'main')
 
         changed = get_changed_files(repo, 'empty-branch')
         assert changed == set()
 
     def test_nonexistent_branch(self, tmp_path):
-        """Nonexistent branch returns empty set."""
+        """Nonexistent branch fails closed instead of looking overlap-free."""
         repo = _init_repo(tmp_path)
-        changed = get_changed_files(repo, 'does-not-exist')
-        assert changed == set()
+        with pytest.raises(GitCommandError):
+            get_changed_files(repo, 'does-not-exist')
+
+
+def test_run_git_timeout_is_explicit(monkeypatch, tmp_path):
+    def timeout(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(['git'], 60)
+
+    monkeypatch.setattr(swarm_merge.subprocess, 'run', timeout)
+    rc, stdout, stderr = run_git(str(tmp_path), 'status')
+    assert rc == 124
+    assert stdout == ''
+    assert 'timed out' in stderr
+
+
+def test_default_branch_uses_origin_head(monkeypatch, tmp_path):
+    monkeypatch.setattr(swarm_merge, 'run_git', lambda *_args: (0, 'origin/main', ''))
+    assert get_default_branch(str(tmp_path)) == 'main'
 
 
 class TestDetectOverlaps:
@@ -151,18 +176,18 @@ class TestTryMerge:
         """Conflicting branches fail gracefully."""
         repo = _init_repo(tmp_path)
 
-        # Modify README.md on master
+        # Modify README.md on main
         readme = Path(repo) / 'README.md'
-        readme.write_text('# Modified on master\n')
+        readme.write_text('# Modified on main\n')
         _git(repo, 'add', '.')
-        _git(repo, 'commit', '-m', 'Modify README on master')
+        _git(repo, 'commit', '-m', 'Modify README on main')
 
-        # Create branch that also modifies README.md (from before the master change)
-        _git(repo, 'checkout', '-b', 'fix/issue-1', 'master~1')
+        # Create branch that also modifies README.md (from before the main change)
+        _git(repo, 'checkout', '-b', 'fix/issue-1', 'main~1')
         readme.write_text('# Modified on branch\n')
         _git(repo, 'add', '.')
         _git(repo, 'commit', '-m', 'Modify README on branch')
-        _git(repo, 'checkout', 'master')
+        _git(repo, 'checkout', 'main')
 
         success, message = try_merge(repo, 'fix/issue-1')
         assert success is False
@@ -172,15 +197,15 @@ class TestTryMerge:
         repo = _init_repo(tmp_path)
 
         readme = Path(repo) / 'README.md'
-        readme.write_text('# Master version\n')
+        readme.write_text('# Main version\n')
         _git(repo, 'add', '.')
-        _git(repo, 'commit', '-m', 'Master change')
+        _git(repo, 'commit', '-m', 'Main change')
 
-        _git(repo, 'checkout', '-b', 'fix/conflict', 'master~1')
+        _git(repo, 'checkout', '-b', 'fix/conflict', 'main~1')
         readme.write_text('# Branch version\n')
         _git(repo, 'add', '.')
         _git(repo, 'commit', '-m', 'Branch change')
-        _git(repo, 'checkout', 'master')
+        _git(repo, 'checkout', 'main')
 
         try_merge(repo, 'fix/conflict')
 
@@ -188,6 +213,24 @@ class TestTryMerge:
         rc, stdout, _ = run_git(repo, 'status', '--porcelain')
         assert rc == 0
         assert stdout == ''
+
+    def test_commit_failure_attempts_merge_abort(self, monkeypatch, tmp_path):
+        calls = []
+        responses = iter([
+            (0, 'merged but not committed', ''),
+            (1, '', 'commit hook failed'),
+            (0, '', ''),
+        ])
+
+        def fake_run_git(_repo, *args):
+            calls.append(args)
+            return next(responses)
+
+        monkeypatch.setattr(swarm_merge, 'run_git', fake_run_git)
+        success, message = try_merge(str(tmp_path), 'fix/issue-1')
+        assert success is False
+        assert 'commit hook failed' in message
+        assert calls[-1] == ('merge', '--abort')
 
 
 class TestMergeBatch:
@@ -242,7 +285,7 @@ class TestMergeBatch:
         """Empty branch list returns empty results."""
         repo = _init_repo(tmp_path)
         results = merge_batch(repo, [])
-        assert results == {'merged': [], 'conflicted': [], 'skipped': []}
+        assert results == {'merged': [], 'conflicted': [], 'skipped': [], 'errors': {}}
 
     def test_default_risk_map(self, tmp_path):
         """Without risk_map, all branches default to single-file."""
@@ -251,6 +294,20 @@ class TestMergeBatch:
 
         results = merge_batch(repo, ['fix/issue-1'])
         assert results['merged'] == ['fix/issue-1']
+
+    def test_changed_file_inspection_failure_never_attempts_merge(self, monkeypatch, tmp_path):
+        repo = _init_repo(tmp_path)
+        attempted = []
+
+        def fail_inspection(*_args, **_kwargs):
+            raise GitCommandError('diff timed out')
+
+        monkeypatch.setattr(swarm_merge, 'get_changed_files', fail_inspection)
+        monkeypatch.setattr(swarm_merge, 'try_merge', lambda *_args: attempted.append(True))
+        results = merge_batch(repo, ['fix/issue-1'])
+        assert results['conflicted'] == ['fix/issue-1']
+        assert results['errors']['fix/issue-1'] == 'diff timed out'
+        assert attempted == []
 
 
 if __name__ == '__main__':

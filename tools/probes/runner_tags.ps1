@@ -5,9 +5,7 @@
 .DESCRIPTION
     Calls gh api repos/<owner/repo>/actions/runners and returns
     {available_tags: [...], shared_runners: <bool>}.
-    Memory entry "runner label mismatch" applies - jobs pending forever
-    when the workflow runs-on label does not match a registered runner.
-    On github.com, correct label is "pscodesign", not "windows".
+    Required runner labels must match the repository workflow configuration.
 
     available_tags is the sorted unique set of all self-hosted runner label
     names. shared_runners is true when no self-hosted runners are registered

@@ -69,7 +69,7 @@ Any new blind-spot learnings appear in the pending learnings list below. The che
 ```
 | #  | Type     | Title                    | Target File                          | Confidence |
 |----|----------|--------------------------|--------------------------------------|------------|
-| 1  | vendor   | Cloud pattern found      | docs/domain-patterns/...            | 0.5        |
+| 1  | vendor   | WidgetAPI pattern found | docs/domain-patterns/...            | 0.5        |
 ```
 
 3. Assess each learning — the learning detector can produce false positives (low confidence, content is session noise rather than real learnings). Flag suspicious entries.
@@ -93,15 +93,21 @@ Promotes a pending learning from `pending-learnings.json` to permanent storage.
 5. Based on destination:
 
 **memory**:
-   - Read `~/.claude/projects/C--Users-user/memory/MEMORY.md`
+   - Read the current project's auto-memory `MEMORY.md` (its path is shown in the session's
+     memory context and varies by working directory)
    - Identify the best section for the learning (match by topic)
    - Append a concise bullet point to that section
    - Verify MEMORY.md stays under 200 lines — if it would exceed, warn and suggest `pattern` instead
 
 **pattern**:
-   - Determine the domain from the learning's `metadata.category` or `type` (e.g., "platform" → `windows.md`, "vendor" → `cloud.md`)
-   - Read the target pattern file from `~/.claude/.obi/patterns/`
-   - Append the learning content
+   - Determine the domain from the learning's `metadata.category` or `type` (e.g., "platform" → `windows.md`, "vendor" → `widgetapi.md`)
+   - Edit the pattern file in the **source repo** at `.obi/patterns/<domain>.md`, then
+     deploy. (Do NOT write to `~/.claude/.obi/patterns/` — that is a deployed copy,
+     overwritten on the next `deploy.ps1`.)
+   - Append the learning content, keeping keywords in the right tier:
+     `anchor_keywords` for product vocabulary that should ground on its own,
+     `match_keywords` for ordinary English that needs a second hit. See `.obi/README.md`
+     for the confidence band both tiers depend on.
    - If the pattern file doesn't exist, create it with a header
 
 **docs**:
@@ -184,13 +190,13 @@ remove the key from the `keys` array.
 
 Found 2 pending proposals:
 
-### Proposal 001: Increase Cloud Budget
-- Parameter: verification.budgets_by_type.cloud
+### Proposal 001: Increase CanvasAPI Budget
+- Parameter: verification.budgets_by_type.canvasapi
 - Current: 2 → Proposed: 3
 - Confidence: 0.72
 - Evidence: 5 sessions analyzed, avg 1.6 corrections
 
-### Proposal 002: Enable Source Injection
+### Proposal 002: Enable StorageAPI Source Injection
 - Parameter: safety.auto_inject_sources
 - Current: false → Proposed: true
 - Confidence: 0.85
@@ -207,10 +213,10 @@ Commands:
 ## Accepted: Proposal 001
 
 Applied change:
-- verification.budgets_by_type.cloud: 2 → 3
+- verification.budgets_by_type.canvasapi: 2 → 3
 
 Calibration updated. Prior state preserved in:
-~/.claude/.obi/memory/evolutions/applied/001_verification_budgets_by_type_cloud.md
+~/.claude/.obi/memory/evolutions/applied/001_verification_budgets_by_type_canvasapi.md
 ```
 
 ### Approve (Learning Graduation)
@@ -246,7 +252,7 @@ Where should this learning go?
 Default verification passes before human gate. Range: 1-5.
 
 ### verification.budgets_by_type.<type>
-Per-task-type verification budgets. Types: cloud, database, powershell, unknown (typically the matched grounding pattern's topic).
+Per-task-type verification budgets. Types: canvasapi, storageapi, widgetapi, powershell, unknown.
 
 ### safety.auto_inject_sources
 Enable/disable automatic grounding source injection at session start.

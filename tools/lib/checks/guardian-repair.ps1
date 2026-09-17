@@ -126,6 +126,10 @@ exit /b 0
         $targetPath = Join-Path $CoreDir $module
 
         if (Test-Path $sourcePath) {
+            $targetParent = Split-Path -Parent $targetPath
+            if (-not (Test-Path $targetParent)) {
+                New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
+            }
             Copy-Item -Path $sourcePath -Destination $targetPath -Force
             Write-Repair "Restored core module from source: $module"
             $repaired += "core/$module"

@@ -10,7 +10,7 @@ running model (no recursive rigor=max dispatch). This module exposes pure
 functions that the orchestrator calls with the classifier's parsed JSON
 verdict; the model call itself is outside this module.
 
-Confidence threshold: 0.7 (per orchestration/obi-auto.md Gate 5, matching
+Confidence threshold: 0.7 (per policies/rigor-max-gates.md Gate 5, matching
 the existing learning-system threshold in learning_detector.py).
 
 Surprise landing (per discovery report deviation #4):
@@ -28,15 +28,20 @@ import json
 import os
 import re
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.paths import get_obi_root
+from core.session_state import StateUnavailable, bounded_file_lock
 
 
 CONFIDENCE_THRESHOLD = 0.7
+_LEARNINGS_THREAD_LOCK = threading.Lock()
+_IO_RETRIES = 10
+_IO_RETRY_SEC = 0.02
 
 # Allowed memory types for /obi-memory-review approve flow. Mirrors the
 # memory schema in user CLAUDE.md auto-memory section.
@@ -294,44 +299,33 @@ def write_surprise_artifacts(
     return {'md_path': str(md_path), 'json_path': str(learnings_json_path)}
 
 
-def _acquire_lock(lock_path: Path, timeout_seconds: float = 5.0) -> bool:
-    """Acquire an exclusive cross-platform file lock by O_EXCL-creating
-    `<learnings>.lock`. Returns True on success, False on timeout.
-
-    `O_CREAT | O_EXCL` is atomic on POSIX and on Windows NTFS — the OS
-    serializes the create call and rejects all but one caller when two
-    processes race. This is stronger than the mtime check used in Round 2,
-    which had a TOCTOU window between the post-write mtime check and the
-    os.replace().
-    """
-    import time
-
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+def _read_text_with_retry(path: Path) -> str:
+    """Read state despite brief Windows scanner/sharing contention."""
+    last_error: Optional[OSError] = None
+    for attempt in range(_IO_RETRIES):
         try:
-            fd = os.open(str(lock_path), flags)
-        except FileExistsError:
-            time.sleep(0.02)
-            continue
-        except OSError:
-            return False
-        # Write owner pid for diagnostics, but not load-bearing.
+            return path.read_text(encoding='utf-8')
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _IO_RETRIES:
+                time.sleep(_IO_RETRY_SEC)
+    raise StateUnavailable(str(path)) from last_error
+
+
+def _replace_with_retry(source: Path, destination: Path) -> None:
+    """Publish state despite brief Windows scanner/sharing contention."""
+    last_error: Optional[OSError] = None
+    for attempt in range(_IO_RETRIES):
         try:
-            os.write(fd, str(os.getpid()).encode('ascii'))
-        finally:
-            os.close(fd)
-        return True
-    return False
-
-
-def _release_lock(lock_path: Path) -> None:
-    try:
-        lock_path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
+            os.replace(str(source), str(destination))
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt + 1 < _IO_RETRIES:
+                time.sleep(_IO_RETRY_SEC)
+    raise StateUnavailable(str(destination)) from last_error
 
 
 def _append_learning_with_retry(
@@ -347,45 +341,58 @@ def _append_learning_with_retry(
     Round 2 added an mtime pre/post check, which closed the simple race but
     still had a TOCTOU window if two writers both read the same pre-mtime
     and both passed the post-mtime check before either reached os.replace.
-    Round 3 (this) uses a sentinel lock file via os.open(O_CREAT|O_EXCL),
-    which the OS serializes atomically. The lock is released only after
-    the os.replace completes, so concurrent writers serialize properly.
-
-    On lock-acquire timeout, fall back to a best-effort append (still using
-    a unique tempfile) to avoid blocking the orchestrator forever.
+    Round 3 used a sentinel lock file via os.open(O_CREAT|O_EXCL), but a
+    crashed holder could strand it and lock timeout fell back to an unlocked
+    write, recreating the lost-update race. Round 4 uses a bounded in-process
+    lock plus the shared crash-safe OS sidecar lock. It retries brief Windows
+    read/replace sharing denials and fails closed if state remains unavailable;
+    it never proceeds unlocked or treats an I/O error as corrupt JSON.
     """
+    learnings_json_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = learnings_json_path.with_name(
         learnings_json_path.name + '.lock'
     )
-    have_lock = _acquire_lock(lock_path, timeout_seconds=lock_timeout_seconds)
-
+    started = time.monotonic()
+    if not _LEARNINGS_THREAD_LOCK.acquire(timeout=lock_timeout_seconds):
+        raise StateUnavailable(str(lock_path))
     try:
-        existing: Dict[str, Any] = {'learnings': []}
-        if learnings_json_path.exists():
+        elapsed = time.monotonic() - started
+        remaining = max(0.001, lock_timeout_seconds - elapsed)
+        with bounded_file_lock(str(lock_path), timeout=remaining):
+            existing: Dict[str, Any] = {'learnings': []}
             try:
-                existing = json.loads(
-                    learnings_json_path.read_text(encoding='utf-8')
-                )
-                if 'learnings' not in existing:
-                    existing['learnings'] = []
-            except (json.JSONDecodeError, OSError):
-                existing = {'learnings': []}
+                loaded = json.loads(_read_text_with_retry(learnings_json_path))
+            except FileNotFoundError:
+                loaded = {'learnings': []}
+            except json.JSONDecodeError:
+                loaded = {'learnings': []}
+            if isinstance(loaded, dict):
+                existing = loaded
+            if not isinstance(existing.get('learnings'), list):
+                existing['learnings'] = []
 
-        existing['learnings'].append(learning_entry)
+            existing['learnings'].append(learning_entry)
 
-        # Per-thread unique tempfile so multi-threaded callers (real concern,
-        # see test_concurrent_threads_serialize_via_lock) don't collide on
-        # the same .tmp path. uuid4() gives a 122-bit random suffix; the
-        # lock above already serializes the os.replace, this just keeps
-        # the tempfile names distinct.
-        tmp_path = learnings_json_path.with_name(
-            f'{learnings_json_path.stem}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp'
-        )
-        tmp_path.write_text(json.dumps(existing, indent=2), encoding='utf-8')
-        os.replace(str(tmp_path), str(learnings_json_path))
+            # Per-thread unique tempfile prevents cleanup collisions. The two
+            # locks above serialize the read-modify-write; the replace retry
+            # handles non-cooperating Windows readers such as endpoint scanners.
+            tmp_path = learnings_json_path.with_name(
+                f'{learnings_json_path.stem}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}.tmp'
+            )
+            try:
+                with tmp_path.open('w', encoding='utf-8') as handle:
+                    json.dump(existing, handle, indent=2)
+                    handle.write('\n')
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                _replace_with_retry(tmp_path, learnings_json_path)
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
     finally:
-        if have_lock:
-            _release_lock(lock_path)
+        _LEARNINGS_THREAD_LOCK.release()
 
 
 def log_skip(

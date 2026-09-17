@@ -22,6 +22,40 @@
 # $PlatformsDir, $OrchestrationDir, $RepoRoot, $ScriptDir, $HooksDir, $DocsDir,
 # $PoliciesDir, $SkillsDir, $ToolsTarget, $UsersDir from the deploy.ps1 caller
 # scope. The `exit 1` on incomplete command set terminates the whole script.
+function Protect-ClaudeSettingsBackup {
+    param(
+        [string]$SettingsTarget,
+        [switch]$DryRun
+    )
+
+    if (-not (Test-Path -LiteralPath $SettingsTarget -PathType Leaf)) { return }
+
+    $backupPath = "$SettingsTarget.backup"
+    if (Test-Path -LiteralPath $backupPath) {
+        Write-Info 'settings.json.backup already exists (preserved from earlier deploy)'
+    } elseif ($DryRun) {
+        Write-Info 'Would backup: settings.json -> settings.json.backup (one-time, preserves user-original)'
+    } else {
+        Copy-Item -LiteralPath $SettingsTarget -Destination $backupPath -ErrorAction Stop
+        Write-Info 'Backed up settings.json -> settings.json.backup (one-time, preserves user-original)'
+    }
+}
+
+function Invoke-ClaudeConfigGuardian {
+    param(
+        [string]$GuardianScript,
+        [string]$RepoRoot
+    )
+
+    & $GuardianScript -RepoRoot $RepoRoot -CheckOnly -NoIssue -NoSnapshot
+    $guardianExitCode = $LASTEXITCODE
+    if ($guardianExitCode -ne 0) {
+        Add-DeployFailure -Stage 'ConfigGuardian' -Detail "Exited with code $guardianExitCode"
+        return $false
+    }
+    return $true
+}
+
 function Invoke-ClaudeDeploy {
     param(
         [switch]$DryRun,
@@ -87,13 +121,13 @@ function Invoke-ClaudeDeploy {
         Write-Check 'Orchestration commands deployed'
     }
 
-    # -- CLAUDE.md --
-    $claudeMdSource = Join-Path $RepoRoot 'CLAUDE.md'
+    # -- Global CLAUDE.md (the per-session contract; the repo-root CLAUDE.md is repo context only) --
+    $claudeMdSource = Join-Path $PlatformsDir 'claude-code\CLAUDE.global.md'
     $claudeMdTarget = Join-Path $ClaudeTarget 'CLAUDE.md'
     if (Test-Path $claudeMdSource) {
         Copy-SingleFile -Source $claudeMdSource -Destination $claudeMdTarget -DryRun:$DryRun | Out-Null
-        Add-ManifestEntry 'CLAUDE.md' 'CLAUDE.md'
-        Write-Check 'CLAUDE.md deployed'
+        Add-ManifestEntry 'CLAUDE.md' 'platforms/claude-code/CLAUDE.global.md'
+        Write-Check 'CLAUDE.md deployed (from platforms/claude-code/CLAUDE.global.md)'
     }
 
     # -- StatusLine script (.ps1 variant) --
@@ -157,10 +191,42 @@ function Invoke-ClaudeDeploy {
         Write-Info 'Deployed skills/'
     }
 
+    # -- Grounding patterns (.obi/patterns -> ~/.claude/.obi/patterns) --
+    # pattern_matcher.load_patterns() reads this deployed copy FIRST, then the
+    # source repo, then user overrides. Without this step a machine with no
+    # source-repo checkout loads zero patterns, which made grounding silently a
+    # dev-workstation-only feature (issue #202).
+    $patternsSource = Join-Path $RepoRoot '.obi\patterns'
+    if (Test-Path $patternsSource) {
+        $patternsTarget = Join-Path $ClaudeTarget '.obi\patterns'
+        Copy-DirectoryContents -Source $patternsSource -Destination $patternsTarget -DryRun:$DryRun
+
+        # MIRROR, not merge. Copy-DirectoryContents only copies files in, so a
+        # pattern deleted or renamed at source would linger in the deployed
+        # directory and keep grounding as a ghost -- and because load_patterns()
+        # reads the deployed copy too, nothing else would ever remove it.
+        if (Test-Path $patternsTarget) {
+            $sourceNames = @(Get-ChildItem -Path $patternsSource -Filter '*.md' -File |
+                Select-Object -ExpandProperty Name)
+            foreach ($deployed in @(Get-ChildItem -Path $patternsTarget -Filter '*.md' -File)) {
+                if ($sourceNames -notcontains $deployed.Name) {
+                    if ($DryRun) {
+                        Write-Info "  [DryRun] would remove stale pattern: $($deployed.Name)"
+                    } else {
+                        Remove-Item -LiteralPath $deployed.FullName -Force
+                        Write-Info "  Removed stale deployed pattern: $($deployed.Name)"
+                    }
+                }
+            }
+        }
+
+        Add-ManifestBulk $patternsSource '.obi/patterns' '.obi/patterns'
+        Write-Info 'Deployed .obi/patterns/'
+    }
+
     # -- Tools (Phase 0 protocol scripts, probes, gates, config-guardian) --
-    # Deployed to $ToolsTarget\tools\ (NOT ~/.claude/tools/) so deployed tools
-    # have a stable home outside the Claude config dir. The deploy also sets
-    # $env:OBI_HOME (User scope) so callers can resolve scripts as
+    # Deployed to the shared $ToolsTarget\tools\ directory. Deployment
+    # also sets $env:OBI_HOME (User scope) so callers can resolve scripts as
     # $env:OBI_HOME\tools\<name>.ps1 without hardcoding the path.
     if (Test-Path $ScriptDir) {
         $toolsDeployDest = Join-Path $ToolsTarget 'tools'
@@ -187,7 +253,9 @@ function Invoke-ClaudeDeploy {
     if (Test-Path $phaseTableSource) {
         $phaseTableDest = Join-Path $ToolsTarget 'phases\phase-table.json'
         Copy-SingleFile -Source $phaseTableSource -Destination $phaseTableDest -DryRun:$DryRun | Out-Null
-        Add-ManifestEntry 'phases/phase-table.json' 'phases/phase-table.json'
+        # The Claude manifest is rooted at ~/.claude. OBI_HOME has a separate
+        # deployment root, so recording this path there would misclassify a
+        # nonexistent ~/.claude/phases target as Claude-owned.
         Write-Info "Deployed phase-table.json -> $phaseTableDest"
     }
 
@@ -202,17 +270,7 @@ function Invoke-ClaudeDeploy {
         # user's pre-Obi original. Preserving the first backup guarantees the
         # uninstall path (and any manual restore) can recover the user's
         # original state regardless of how many subsequent deploys ran.
-        if (Test-Path $settingsTarget) {
-            $backupPath = "$settingsTarget.backup"
-            if (Test-Path $backupPath) {
-                Write-Info "settings.json.backup already exists (preserved from earlier deploy)"
-            } elseif ($DryRun) {
-                Write-Info "Would backup: settings.json -> settings.json.backup (one-time, preserves user-original)"
-            } else {
-                Copy-Item -LiteralPath $settingsTarget -Destination $backupPath
-                Write-Info "Backed up settings.json -> settings.json.backup (one-time, preserves user-original)"
-            }
-        }
+        Protect-ClaudeSettingsBackup -SettingsTarget $settingsTarget -DryRun:$DryRun
 
         # Validate hook paths in the source settings
         $hookValidation = Test-HookCommandPaths -SettingsPath $userSettingsSource -FallbackDir $HooksDir
@@ -304,14 +362,14 @@ function Invoke-ClaudeDeploy {
         }
     }
 
-    # -- Validate all 20 commands deployed --
+    # -- Validate all 17 commands deployed --
     if (-not $DryRun) {
         $requiredCommands = @(
-            'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+            'author.md', 'discovery.md', 'integrate.md',
             'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
             'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
             'readme-review.md', 'release.md', 're-review.md', 'review.md',
-            'simplify.md', 'triage.md'
+            'simplify.md'
         )
         $installed = (Get-ChildItem "$commandsTarget\*.md" -ErrorAction SilentlyContinue).Name
         $missing = $requiredCommands | Where-Object { $_ -notin $installed }
@@ -326,9 +384,9 @@ function Invoke-ClaudeDeploy {
         }
         Write-Check "All $($requiredCommands.Count) commands verified"
 
-        # Validate agents (all 13 workflow agents from platforms/claude-code/agents/)
+        # Validate agents (all 12 workflow agents from platforms/claude-code/agents/)
         $requiredAgents = @(
-            'obi-wag.md', 'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
+            'obi-discovery.md', 'obi-author.md', 'obi-simplify.md',
             'obi-reviewer.md', 'obi-integrator.md', 'obi-rereviewer.md',
             'obi-readme.md', 'obi-readme-verifier.md', 'obi-release-gate.md',
             'obi-learner.md',
@@ -344,26 +402,8 @@ function Invoke-ClaudeDeploy {
         }
     }
 
-    # Step 2.5: Write deployment manifest
-    if (-not $DryRun) {
-        $obiDir = Join-Path $ClaudeTarget '.obi'
-        if (-not (Test-Path $obiDir)) {
-            New-Item -ItemType Directory -Path $obiDir -Force | Out-Null
-        }
-        $manifestObj = @{
-            version = '1.0'
-            deployed_at = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
-            mappings = $script:manifest
-        }
-        $manifestPath = Join-Path $obiDir 'deployment-manifest.json'
-        $manifestJson = $manifestObj | ConvertTo-Json -Depth 3
-        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-        [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
-        Write-Check "Deployment manifest written ($($script:manifest.Count) entries)"
-    }
-
-    # Step 2.55: Restore project memory from backup if missing
-    # Safety net for external wipes (e.g., quiet-shift reset).
+    # Step 2.5: Restore project memory from backup if missing
+    # Safety net for external wipes (e.g., external tooling reset).
     # Only restores when memory directory is empty/missing; never overwrites.
     if (-not $DryRun) {
         $projectsDir = Join-Path $ClaudeTarget 'projects'
@@ -425,11 +465,16 @@ function Invoke-ClaudeDeploy {
 
     # Step 2.6: Post-deploy validation
     # config-guardian now lives permanently at $ToolsTarget\tools\, which is
-    # CB-trusted. The previous staging-and-cleanup dance is no longer needed.
+    # user-local. The previous staging-and-cleanup dance is no longer needed.
     if (-not $DryRun) {
         Write-Step 'Running Config Guardian post-deploy validation...'
         $guardianScript = Join-Path $ToolsTarget 'tools\config-guardian.ps1'
-        & $guardianScript -RepoRoot $RepoRoot -CheckOnly -NoIssue -NoSnapshot
+        Invoke-ClaudeConfigGuardian -GuardianScript $guardianScript -RepoRoot $RepoRoot | Out-Null
+
+        # Commit the new ownership baseline only after copies and validation
+        # succeed. A failed deployment keeps the prior manifest intact so its
+        # hashes remain an honest record of the last successful installation.
+        Write-ClaudeDeploymentManifest
     }
 
     Write-Check 'Claude Code deployment complete'

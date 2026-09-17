@@ -7,7 +7,7 @@ Covers four fixes that eliminated recurring false positives:
    user correction -> inflated "High correction session").
 2. High-correction WORKFLOW signal is no longer graduated as a learning.
 3. reference_impl requires the success signal NEAR the integration keyword
-   (was: skills-catalog "Analytics MCP servers" + unrelated "works" elsewhere).
+   (was: skills-catalog "ExampleDB MCP servers" + unrelated "works" elsewhere).
 4. Persistent suppression list drops dismissed (type, category) shapes.
 """
 
@@ -93,14 +93,14 @@ class TestJsonlConversationParsing:
     def test_attachment_record_excluded(self):
         skills = (
             "The following skills are available for use with the Skill tool:\n"
-            "- reviewing-code: Two-pass methodology. sql-safety: rules for Analytics MCP servers."
+            "- reviewing-code: Two-pass methodology. sql-safety: rules for ExampleDB MCP servers."
         )
         transcript = _jsonl(
             {"type": "attachment", "content": skills},
             _user_text("hello"),
         )
         convo = extract_conversation_text(transcript)
-        assert "Analytics MCP servers" not in convo
+        assert "ExampleDB MCP servers" not in convo
         assert "hello" in convo
 
     def test_non_jsonl_returns_empty(self):
@@ -130,8 +130,8 @@ class TestReferenceImplProximity:
         # Integration keyword and success signal >300 chars apart (skills-catalog
         # shape): keyword in a listing, "works" in unrelated prose far away.
         transcript = (
-            "sql-safety: SQL query safety rules for Analytics MCP servers. "
-            + ("filler narrative about invoices and circuits. " * 12)
+            "sql-safety: SQL query safety rules for ExampleDB and DemoDB MCP servers. "
+            + ("filler narrative about widgets and canvases. " * 12)
             + "The deployment works correctly and is a working implementation."
         )
         result = detect_reference_implementations(transcript)
@@ -176,7 +176,7 @@ class TestSuppression:
             title="t",
             content="x",
             target_file="f",
-            metadata={"category": "service-management"},
+            metadata={"category": "widgetapi"},
         )
         assert supp.filter_suppressed([other]) == [other]
 

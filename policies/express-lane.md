@@ -1,6 +1,6 @@
 # Express Lane Policy
 
-> **Version:** 1.1 | **Last Updated:** 2026-06-18 (OPT-18 lane-first)
+> **Version:** 1.1 | **Last Updated:** 2026-06-18
 
 ## Purpose
 
@@ -8,7 +8,7 @@ Skip optional review phases for small changes to maintain velocity without sacri
 
 ## Threshold
 
-**25 lines of code or fewer** across all changed files (excluding tests, documentation, and generated files).
+**Fewer than 25 lines of code** across all changed files (excluding tests, documentation, and generated files) — the same exclusive bound `tools/classify-lane.ps1` applies.
 
 ## How to Calculate
 
@@ -18,7 +18,7 @@ not apply, the express lane is recommended; the orchestrator then applies the ex
 
 ## What Gets Skipped
 
-Lane-first (OPT-18): the `express` lane in `phases/phase-table.json` declares the TOTAL phase list
+The `express` lane in `phases/phase-table.json` declares the TOTAL phase list
 `[1, 2, 3, 4, 5, 7, 9, 10]` — **Re-review (6) and README Review (8) are absent**. The `lanes`
 structure is the canonical source of which phases run; this policy holds only the threshold +
 exclusions that classify a change INTO the express lane. The orchestrator walks the lane's phase

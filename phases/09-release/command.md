@@ -1,6 +1,8 @@
 ---
 description: Final verification before deployment. Verify everything, stage changes, provide release checklist. Do NOT push.
-allowed-tools: Read, Glob, Grep, Bash
+model: sonnet
+effort: medium
+allowed-tools: Read, Glob, Grep, Bash, Write
 ---
 
 # Release Gate Role
@@ -16,24 +18,24 @@ release checklist. Do NOT push - the user handles the actual GitHub PR.
 ## Policy References
 
 **MUST READ before proceeding:**
-- `docs/policies/zero-hallucination.md` - Never invent vendor APIs, endpoints, cmdlets,...
-- `docs/policies/hard-stop-conditions.md` - Certain conditions trigger immediate workflow...
-- `docs/policies/vendor-rules.md` - 
+- `orchestration/inline-fallback-recipes.md`, Recipe G — canonical executable release procedure
+- Codex/source checkout: `policies/zero-hallucination.md`,
+  `policies/hard-stop-conditions.md`, and `policies/vendor-rules.md`
+- Claude Code deployed mirror: `docs/policies/zero-hallucination.md`,
+  `docs/policies/hard-stop-conditions.md`, and `docs/policies/vendor-rules.md`
 
 If proof is missing for any vendor API: Output `MISSING SOURCE:` and STOP.
 
 ## Process
 
-1. Run all verification checks above
-2. Fix any issues found (or report blockers)
-3. **Version bump** (obiwag-agents only):
-   - If `tools/version.yaml` exists in the repo root, `Read tools/version.yaml` to get the current version
-   - Compute the next patch version (e.g., 0.69.1 → 0.69.2)
-   - Run: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/bump-version.ps1 -Version <next>`
-   - Do NOT use the `-Commit` flag — the release gate handles staging
-   - If this is not the obiwag-agents repo, skip this step silently
-4. Stage changes: git add -A
-5. DO NOT push - the user handles GitHub workflow
+1. Read Recipe G completely and execute every applicable check. Do not substitute a monolithic
+   test run for its bounded complete/disjoint shard procedure.
+2. Fix minor gate-owned issues; report substantive blockers with evidence.
+3. Preserve the entry worktree boundary. Stage every task-owned change by explicit file list only;
+   never use `git add -A`, and never stage `.obi/`, `graphify-out/`, or pre-existing user changes.
+4. Write the Recipe G release report with commands, executed counts, timeout cleanup (if any), live
+   local deploy output, version/changelog state, and the exact staged list.
+5. DO NOT push — the user handles GitHub workflow.
 
 ## Output Format
 
@@ -51,7 +53,7 @@ When complete, provide:
 | Documentation | PASS/FAIL |
 
 ### Staged Changes
-[List of files staged with `git add -A`]
+[Explicit task-owned file list; confirm excluded scratch/user state]
 
 ### Blockers (if any)
 - [Issue]: [MISSING SOURCE or other blocker]
@@ -60,13 +62,9 @@ When complete, provide:
 
 ## Release Checklist for the user
 
-Ready to release! Complete these steps:
-
 1. [ ] Review staged changes: `git diff --cached`
-2. [ ] Push to branch: `git push origin [branch-name]`
-3. [ ] Open PR on GitHub
-4. [ ] Monitor the workflow run for success
-5. [ ] Merge after approval
+2. [ ] Commit to main (default) or push the branch and open an PR when the change was parallelized or is risky enough to want review
+3. [ ] Monitor workflow run for success
 
 ### What's Being Released
 [Summary of changes in this release]
@@ -83,21 +81,7 @@ Ready to release! Complete these steps:
 
 Report the blocker and wait for fixes before proceeding
 
-## Express Lane Reminder
-
-If this was a small change (<25 lines):
-- Initial review was still required
-- Re-review after integration was skipped
-- This final gate is still required
-
-All other changes require the full workflow.
-
-## Progress
-
-On entry, emit the progress bar with Release Gate active:
-```
-[9/10] ● Disc ━ ● Auth ━ ● Simp ━ ● Rev ━ ● Intg ━ ● ReRv ━ ● Read ━ ● RdRv ━ ◐ Rel ━ ○ Lrn
-```
+## Completion
 
 - **Passed:** Output `RELEASE GATE PASSED`
 - **Failed:** Output `RELEASE GATE FAILED: [reason]`

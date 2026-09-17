@@ -137,7 +137,7 @@ fi
 # render on Windows git-bash where each fork is ~170 ms).
 IFS='|' read -r now_ts today_str < <(date '+%s|%F' | tr -d '\r')
 
-# Session-start timestamp: short-circuit jq with first(inputs | ...) — reads
+# Session-start timestamp: stop reading early in jq with first(inputs | ...) — reads
 # the transcript stream and exits at the first .timestamp it finds.  Falls
 # back to file mtime when the transcript has no parseable timestamp yet.
 start_iso=""

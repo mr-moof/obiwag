@@ -12,6 +12,7 @@ Windows backslash paths) stay here because they need non-regex
 evaluation logic.
 """
 
+import json
 import os
 import re
 import sys
@@ -88,11 +89,51 @@ def _has_windows_backslash_path(command: str) -> bool:
 # failure) a long foreground call can sit unbounded with no way to interrupt it
 # from inside the call. The guard forces likely-long commands to either run
 # backgrounded (control returns immediately; poll the output file) or carry an
-# explicit bounded timeout, and caps any explicit foreground timeout at 5 min.
+# explicit bounded timeout. The default foreground cap is 5 min; recognized
+# Pester-only commands get 10 min because deterministic release shards can
+# legitimately exceed the default without being stalled.
 
-# Foreground runtime cap (ms). Mirrors the Bash tool's own max (600000) but
-# tighter — nothing should silently hold the turn longer than this.
+# Foreground runtime caps (ms). Keep the Pester exception narrow: the mixed
+# no-argument run-tests.ps1 suite and every non-Pester command retain 5 min.
 _FOREGROUND_TIMEOUT_CAP_MS = 300000
+_PESTER_FOREGROUND_TIMEOUT_CAP_MS = 600000
+# Absolute host ceiling for one foreground tool call. A bounded supervisor may
+# use the whole window, but never more: past it the harness -- not the
+# supervisor -- ends the call, and the terminal status is lost.
+_SUPERVISOR_TIMEOUT_CAP_MS = 600000
+
+_RUN_TESTS_ENTRYPOINT_RE = re.compile(r"\brun-tests\.ps1\b", re.IGNORECASE)
+_POWERSHELL_ONLY_ARG_RE = re.compile(
+    r"(?<!\w)-PowerShellOnly\b(?![:=])", re.IGNORECASE
+)
+_PYTHON_ONLY_ARG_RE = re.compile(r"(?<!\w)-PythonOnly\b", re.IGNORECASE)
+_PESTER_TEST_PATH_RE = re.compile(r"\.tests\.ps1(?:['\"])?(?:\s|,|$)", re.IGNORECASE)
+_PYTHON_TEST_PATH_RE = re.compile(r"\.py(?:['\"])?(?:\s|,|$)", re.IGNORECASE)
+_INVOKE_PESTER_RE = re.compile(r"\bInvoke-Pester\b", re.IGNORECASE)
+_COMMAND_CHAIN_RE = re.compile(r"(?:&&|\|\||[|;\r\n])")
+
+
+def _is_pester_only_command(command: str) -> bool:
+    """Return True only when the command is unambiguously Pester-only."""
+    if _COMMAND_CHAIN_RE.search(command):
+        return False
+    if _PYTHON_ONLY_ARG_RE.search(command) or _PYTHON_TEST_PATH_RE.search(command):
+        return False
+    if _INVOKE_PESTER_RE.search(command):
+        return True
+    if not _RUN_TESTS_ENTRYPOINT_RE.search(command):
+        return False
+    return bool(
+        _POWERSHELL_ONLY_ARG_RE.search(command)
+        or _PESTER_TEST_PATH_RE.search(command)
+    )
+
+
+def _foreground_timeout_cap_ms(command: str) -> int:
+    """Select the approved cap for this foreground command."""
+    if _is_pester_only_command(command):
+        return _PESTER_FOREGROUND_TIMEOUT_CAP_MS
+    return _FOREGROUND_TIMEOUT_CAP_MS
 
 # Commands that are "go get coffee" slow (network installs, cold-start tooling,
 # clones). Conservative + high-confidence to keep false positives low. ssh/scp/
@@ -111,42 +152,225 @@ _SLOW_FOREGROUND_RE = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Supervisors have different ownership contracts; matching a wrapper name is
+# not proof that shell-level background execution is safe. dispatch-worker and
+# every peer-review API call stay foreground. peer-review start returns a
+# receipt quickly and its Python broker performs the only supported detach;
+# shell background cancellation would still risk losing that receipt.
+_FOREGROUND_SUPERVISOR_RE = re.compile(
+    r"(dispatch-worker\.ps1|peer-review\.ps1)",
+    re.IGNORECASE,
+)
+# Raw long-running commands that must NOT be launched as a bare background job
+# (issue #200 §4). Backgrounded, they run detached with no durable terminal
+# state; the environment wall-clock kills them silently and the orchestrator
+# cannot distinguish "killed" from "completed" (the observed obi-auto-max
+# failure). They must run through the bounded supervisor, or foreground with a
+# timeout within the command-class cap. Superset of _SLOW_FOREGROUND_RE plus the
+# build/test/lint/pipeline-wait class the issue calls out.
+_BACKGROUND_DENY_RE = re.compile(
+    r"""(
+        \bnpx\b
+      | \bnpm\s+(?:install|ci|i|run\s+\w+|test)
+      | \b(?:yarn|pnpm)\s+(?:install|add|build|run|test)
+      | \b(?:pip|pip3)\s+install
+      | \buv\s+(?:run|sync|pip\s+install)
+      | \bdocker\s+(?:build|pull|push)
+      | \bdocker\s+compose\s+(?:up|build)
+      | \bgit\s+clone
+      | build\.ps1
+      | \bdotnet\s+(?:build|test|publish|restore)
+      | \bmsbuild\b(?![-.])
+      | \bgradlew?\b(?![-.])
+      | \bmvn\b(?![-.])
+      | \bmake\b(?![-.])
+      | \bcargo\s+(?:build|test)
+      | \bgo\s+(?:build|test)
+      | \bpytest\b(?![-.])
+      | Invoke-Pester
+      | run-tests\.ps1
+      | \bgh\s+run\s+watch
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+_DISPATCH_WORKER_RE = re.compile(r"dispatch-worker\.ps1", re.IGNORECASE)
+_PEER_REVIEW_RUN_RE = re.compile(r"peer-review\.ps1\s+run\b", re.IGNORECASE)
+_TIMEOUT_SEC_ARG_RE = re.compile(r"-TimeoutSec\s+(\d+)", re.IGNORECASE)
+_PHASE_ARG_RE = re.compile(r"-Phase\s+(\d+)", re.IGNORECASE)
+_DEFAULT_CLEANUP_MARGIN_SEC = 30
+_DEFAULT_DISPATCH_ABSOLUTE_SEC = 270
+_DEFAULT_PEER_RUN_TIMEOUT_SEC = 240
+
+
+def _phase_table_candidates() -> list[str]:
+    roots = [os.environ.get("OBI_HOME"), os.environ.get("OBIWAG_SOURCE"),
+             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    return [os.path.join(r, "phases", "phase-table.json") for r in roots if r]
+
+
+def _phase_outer_sec(phase: int) -> int | None:
+    """absolute_sec + cleanup_margin_sec for the Claude delegation policy of `phase`.
+
+    Reads the same phase table the supervisor uses (OBI_HOME first). Any failure
+    returns None so the caller falls back to the documented default budget.
+    """
+    for path in _phase_table_candidates():
+        try:
+            if os.path.getsize(path) > 2 * 1024 * 1024:
+                continue
+            with open(path, "r", encoding="utf-8") as handle:
+                table = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        defaults = (table.get("delegation_policy_defaults") or {}).get("claude") or {}
+        policy = dict(defaults)
+        for entry in table.get("phases") or []:
+            if entry.get("n") == phase:
+                policy.update(((entry.get("delegation_policy") or {}).get("claude")) or {})
+                break
+        try:
+            return int(policy["absolute_sec"]) + int(policy.get("cleanup_margin_sec", _DEFAULT_CLEANUP_MARGIN_SEC))
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
+def _supervisor_timeout_floor_ms(command: str) -> tuple[int, str]:
+    """Smallest outer timeout that still outlives the supervisor's own deadline.
+
+    Peer finding PR-003: accepting any positive timeout let a 120 000 ms outer
+    call wrap a 540 s dispatch, which the harness then killed mid-run. An
+    explicit `-TimeoutSec N` wins; otherwise a dispatch-worker call resolves its
+    `-Phase` budget from the phase table (default policy when unresolvable) and a
+    `peer-review.ps1 run` uses its documented 240 s default.
+    """
+    # Classify the operation FIRST (peer finding COD-001): only a call that OWNS a provider
+    # process for its whole duration has a deadline the outer timeout must outlive --
+    # dispatch-worker.ps1, and peer-review.ps1 `run`. `start` returns a receipt and detaches a
+    # broker worker whose -TimeoutSec (up to 3600) is the broker's deadline, not this call's;
+    # status/wait/result/cancel/preflight own nothing. Their floor is zero.
+    owns_provider = bool(_DISPATCH_WORKER_RE.search(command)) or bool(_PEER_REVIEW_RUN_RE.search(command))
+    if not owns_provider:
+        return 0, "no foreground supervisor deadline (receipt or control-plane operation)"
+    match = _TIMEOUT_SEC_ARG_RE.search(command)
+    if match:
+        sec = int(match.group(1)) + _DEFAULT_CLEANUP_MARGIN_SEC
+        return sec * 1000, f"-TimeoutSec {match.group(1)} + {_DEFAULT_CLEANUP_MARGIN_SEC} s cleanup margin"
+    if _DISPATCH_WORKER_RE.search(command):
+        phase_match = _PHASE_ARG_RE.search(command)
+        if phase_match:
+            outer = _phase_outer_sec(int(phase_match.group(1)))
+            if outer is not None:
+                return outer * 1000, f"phase {phase_match.group(1)} delegation_policy"
+        return (_DEFAULT_DISPATCH_ABSOLUTE_SEC + _DEFAULT_CLEANUP_MARGIN_SEC) * 1000, "the default dispatch budget"
+    return (_DEFAULT_PEER_RUN_TIMEOUT_SEC + _DEFAULT_CLEANUP_MARGIN_SEC) * 1000, "the default peer-review run budget"
+
 
 def check_duration_guard(tool_input: dict) -> str | None:
-    """Block unbounded foreground shell calls that risk parking the turn.
+    """Guard shell calls that risk a silent stall (issue #200 §4).
 
-    Allowed: any backgrounded call (``run_in_background: true``); any call with
-    an explicit ``timeout`` <= the 5-min cap. Blocked: a slow-pattern command
-    run foreground without an explicit timeout, and any explicit foreground
-    timeout above the cap. Returns the block reason, or None to allow.
+    Background is no longer a blanket exemption. The execution-mode matrix is
+    explicit: dispatch-worker/peer-review entrypoints must remain foreground so
+    their receipt/terminal state cannot be discarded. A RAW long-running command
+    backgrounded is denied.
+    Foreground calls retain the 5-minute outer cap except for a narrow 10-minute
+    Pester-only allowance. Internally-bounded supervisors may omit a shell
+    timeout because their own deadline is earlier.
+    Returns the block reason, or None to allow.
     """
+    command = tool_input.get("command", "") or ""
+
     if tool_input.get("run_in_background") is True:
-        return None  # backgrounded — returns control immediately, can't park
+        if _FOREGROUND_SUPERVISOR_RE.search(command):
+            return (
+                "This supervisor must run FOREGROUND. Background task cancellation "
+                "can discard its durable receipt or terminal status. Run it foreground. "
+                "For a long review use peer-review.ps1 start; the broker owns the "
+                "detach and returns a RunId immediately."
+            )
+        if _BACKGROUND_DENY_RE.search(command):
+            return (
+                "Raw long-running command backgrounded: detached, it is "
+                "wall-clock-killed with no durable terminal state, so the "
+                "orchestrator can't tell 'killed' from 'completed' (issue #200). "
+                "Run it foreground with an explicit bounded timeout (<= 600000 ms "
+                "for a recognized Pester-only command; <= 300000 ms otherwise), or "
+                "through the bounded supervisor (dispatch-worker.ps1 / "
+                "peer-review.ps1) which records a terminal status. For a CI/pipeline "
+                "wait, use ONE poll-until-terminal command that exits on terminal "
+                "state, not a background job that waits."
+            )
+        return None  # a quick backgrounded command returns control immediately
 
     timeout = tool_input.get("timeout")
     has_explicit_timeout = isinstance(timeout, (int, float)) and timeout > 0
 
-    if has_explicit_timeout and timeout > _FOREGROUND_TIMEOUT_CAP_MS:
+    # Foreground supervisors are internally bounded, but the harness kills the
+    # outer call at its own ceiling. Without an explicit timeout the caller
+    # inherits the default cap, which can be EARLIER than the supervisor's own
+    # deadline -- the call dies before a terminal status is written (issue #200
+    # T1). Require the outer bound to be stated and to be <= the host ceiling.
+    if _FOREGROUND_SUPERVISOR_RE.search(command):
+        if not has_explicit_timeout:
+            return (
+                "Bounded supervisors must be called with an EXPLICIT timeout so "
+                "the outer call outlives the supervisor's own deadline. Without "
+                "one the harness applies its own default cap (120 s in Claude "
+                "Code), which is earlier than the supervisor's deadline and can "
+                "kill the call before it writes a terminal status, leaving a "
+                "stale 'running' record and an orphan child. Pass timeout = the "
+                "phase's absolute_sec + cleanup_margin_sec in ms "
+                f"(<= {_SUPERVISOR_TIMEOUT_CAP_MS})."
+            )
+        if timeout > _SUPERVISOR_TIMEOUT_CAP_MS:
+            return (
+                "Supervisor timeout exceeds the host ceiling "
+                f"({_SUPERVISOR_TIMEOUT_CAP_MS} ms). The harness would kill the "
+                "call before the supervisor can persist a terminal status. Lower "
+                "the timeout, or lower the phase budget in phases/phase-table.json "
+                "so absolute_sec + cleanup_margin_sec fits."
+            )
+        floor_ms, floor_why = _supervisor_timeout_floor_ms(command)
+        if timeout < floor_ms:
+            return (
+                f"Supervisor timeout {int(timeout)} ms is below the supervisor's own "
+                f"deadline plus cleanup margin ({floor_ms} ms, from {floor_why}). The "
+                "harness would kill the call before the supervisor finishes, leaving "
+                "a stale 'running' record. Pass timeout = the phase's absolute_sec + "
+                "cleanup_margin_sec in ms (get-dispatch-phase-policy.ps1 -Phase <N> "
+                "prints outer_timeout_ms)."
+            )
+        return None
+
+    timeout_cap = _foreground_timeout_cap_ms(command)
+    if has_explicit_timeout and timeout > timeout_cap:
+        if timeout_cap == _PESTER_FOREGROUND_TIMEOUT_CAP_MS:
+            return (
+                "Pester-only foreground shell calls are capped at 10 min "
+                "(timeout <= 600000 ms). Lower the timeout or split the Pester "
+                "selection into bounded shards."
+            )
         return (
-            "Foreground shell calls are capped at 5 min (timeout <= 300000 ms). "
-            "Lower the timeout, or set run_in_background: true and poll the "
-            "output file for long-running work."
+            "Foreground shell calls are capped at 5 min (timeout <= 300000 ms); "
+            "only recognized Pester-only commands may use up to 600000 ms. "
+            "Lower the timeout, or run it through the bounded supervisor "
+            "(dispatch-worker.ps1 / peer-review.ps1) for long-running work."
         )
 
-    command = tool_input.get("command", "") or ""
     if _SLOW_FOREGROUND_RE.search(command) and not has_explicit_timeout:
         return (
             "This looks long-running (network install / cold-start tooling) and "
             "is foreground with no explicit timeout, so a dropped result would "
-            "park the turn unbounded. Re-issue with run_in_background: true (then "
-            "poll the output file), or add an explicit timeout <= 300000 ms if "
-            "you're sure it's quick."
+            "park the turn unbounded. Add an explicit timeout <= 300000 ms, or "
+            "run it through the bounded supervisor (dispatch-worker.ps1)."
         )
     return None
 
 
 # Test file patterns — matched against file_path for Edit/Write operations.
-# If matched, a reminder is injected (not a block) referencing Non-Negotiable Rule #1.
+# If matched, a reminder is injected (not a block): fix the code under test, not the test.
 TEST_FILE_PATTERNS = [
     r'[/\\]tests?[/\\]',           # tests/ or test/ directories
     r'[/\\]test_\w+\.py$',         # test_*.py files
@@ -169,10 +393,9 @@ def check_test_file_edit(tool_input: dict) -> str | None:
     for pattern in TEST_FILE_PATTERNS:
         if re.search(pattern, file_path):
             return (
-                "REMINDER: You are editing a test file. If this test is failing, "
-                "fix the code under test — never modify the test to make it pass "
-                "(Non-Negotiable Rule #1). If you have a legitimate reason to "
-                "change this test, proceed."
+                "You are editing a test file. If this test is failing, fix the code "
+                "under test rather than the test; a test rewritten to pass hides the "
+                "defect it was guarding. If the test itself is wrong, proceed."
             )
     return None
 
@@ -227,7 +450,7 @@ def check_bash_anti_patterns(command: str) -> str | None:
             "(C:/dir/file) or bare command names (python, not C:\\Python314\\python.exe)."
         )
 
-    # NPM execution-restriction rules first — domain-distinct from the anti-pattern set.
+    # NPM AppLocker rules first — domain-distinct from the anti-pattern set.
     npm_match = evaluate_rules(RESTRICTED_NPM_RULES, cmd_only)
     if npm_match is not None:
         return npm_match[1]

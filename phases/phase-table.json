@@ -1,6 +1,30 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the Obi Wag phase routing contract (OPT-10). Edit this file, then run tools/render-phase-table.ps1 to regenerate the human table in phases/README.md. Do not hand-edit the table between the <!-- obi:phase-table-start --> / <!-- obi:phase-table-end --> markers. 'display' fields are presentation-only (table rendering); the routing fields (delegated, default_strategy, recipe, inline_fallback_eligible, primary_signal, special_signals, transitions) are the behavioral contract consumed by orchestration/obi-auto.md. The top-level 'lanes' object (OPT-18) declares each lane's TOTAL ordered phase list; the orchestrator classifies a lane after Author and walks that list.",
-  "schema_version": 6,
+  "_comment": "SINGLE SOURCE OF TRUTH for the Obi Wag phase routing contract (OPT-10). Edit this file, then run tools/render-phase-table.ps1 to regenerate the human table in phases/README.md. Do not hand-edit the table between the <!-- obi:phase-table-start --> / <!-- obi:phase-table-end --> markers. 'display' fields are presentation-only (table rendering); the routing fields (delegated, default_strategy, recipe, inline_fallback_eligible, primary_signal, special_signals, transitions, delegation_policy) plus delegation_policy_defaults are the behavioral contract consumed by orchestration/obi-auto.md. The top-level 'lanes' object (OPT-18) declares each lane's TOTAL ordered phase list; the orchestrator classifies a lane after Author and walks that list.",
+  "schema_version": 7,
+  "efficiency": {
+    "schema_version": 1,
+    "controlled_prompt_bytes": 98304,
+    "routing": {
+      "tiers": {
+        "routine": {
+          "claude": {"model": "sonnet", "effort": "medium"},
+          "codex": {"model": "gpt-5.6-terra", "effort": "medium"}
+        },
+        "strong": {
+          "claude": {"model": "fable[1m]", "effort": "xhigh"},
+          "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"}
+        }
+      }
+    },
+    "handoff_budgets": {
+      "total_bytes": 65536,
+      "sections": {"narrative": 8192, "references": 16384, "excerpts": 32768, "read_batches": 8192}
+    }
+  },
+  "delegation_policy_defaults": {
+    "claude": {"nominal_work_sec": 270, "idle_sec": 90, "productive_extension_sec": 0, "finalization_sec": 0, "absolute_sec": 270, "recent_progress_sec": 15, "cleanup_margin_sec": 30},
+    "codex": {"synthesis_due_sec": 270, "grace_sec": 60, "recent_progress_sec": 60, "wait_window_max_sec": 60, "resume_window_count": 2, "resume_window_sec": 60, "terminal_states": ["completed", "native_completion_stalled"], "initial_classifications": ["completed", "productive_budget_exhausted", "interrupted_after_grace"], "synthesis_instruction": "No more tools. Return the phase artifact now from current evidence; list missing sources instead of researching further."}
+  },
   "lanes": {
     "trivial": {
       "phases": [2, 9],
@@ -39,7 +63,11 @@
         {"value": "HARD STOP:", "match_mode": "prefix"}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/discovery", "model": "opus", "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — retry-or-halt", "signal_display": "`DISCOVERY COMPLETE`"}
+      "delegation_policy": {
+        "claude": {"nominal_work_sec": 390, "idle_sec": 90, "productive_extension_sec": 90, "finalization_sec": 60, "absolute_sec": 540, "recent_progress_sec": 15, "cleanup_margin_sec": 30},
+        "codex": {"synthesis_due_sec": 270, "grace_sec": 60, "recent_progress_sec": 60, "wait_window_max_sec": 60, "resume_window_count": 2, "resume_window_sec": 60, "terminal_states": ["completed", "native_completion_stalled"], "initial_classifications": ["completed", "productive_budget_exhausted", "interrupted_after_grace"], "synthesis_instruction": "No more tools. Return the phase artifact now from current evidence; list missing sources instead of researching further.", "research": {"targeted_local_call_limit": 12, "official_source_batch_call_limit": 4, "source_open_stop_sec": 180}}
+      },
+      "display": {"command": "/discovery", "model": "fable", "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — bounded primary takeover", "signal_display": "`DISCOVERY COMPLETE`"}
     },
     {
       "n": 2,
@@ -56,7 +84,11 @@
         {"value": "AUTHOR BLOCKED:", "match_mode": "regex", "pattern": "^AUTHOR BLOCKED:\\s.+$"}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/author", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — retry-or-halt", "signal_display": "`AUTHOR COMPLETE`"}
+      "delegation_policy": {
+        "claude": {"nominal_work_sec": 420, "idle_sec": 90, "productive_extension_sec": 60, "finalization_sec": 60, "absolute_sec": 540, "recent_progress_sec": 15, "cleanup_margin_sec": 30},
+        "codex": {"synthesis_due_sec": 270, "grace_sec": 60, "recent_progress_sec": 60, "wait_window_max_sec": 60, "resume_window_count": 2, "resume_window_sec": 60, "terminal_states": ["completed", "native_completion_stalled"], "initial_classifications": ["completed", "productive_budget_exhausted", "interrupted_after_grace"], "synthesis_instruction": "No more tools. Return the phase artifact now from current evidence; list missing sources instead of researching further."}
+      },
+      "display": {"command": "/author", "model": "fable", "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — bounded primary takeover", "signal_display": "`AUTHOR COMPLETE`"}
     },
     {
       "n": 3,
@@ -72,7 +104,7 @@
         {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/simplify", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`SIMPLIFY COMPLETE` \\| `SIMPLIFY SKIPPED`"}
+      "display": {"command": "/simplify", "model": "sonnet", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`SIMPLIFY COMPLETE` \\| `SIMPLIFY SKIPPED`"}
     },
     {
       "n": 4,
@@ -84,10 +116,10 @@
       "inline_fallback_eligible": true,
       "primary_signal": {"value": "REVIEW COMPLETE: PASS", "match_mode": "regex", "pattern": "^REVIEW COMPLETE: PASS$"},
       "special_signals": [
-        {"value": "REVIEW COMPLETE: FAIL", "match_mode": "regex", "pattern": "^REVIEW COMPLETE: FAIL \\d+ issues?$"}
+        {"value": "REVIEW COMPLETE: FAIL", "match_mode": "regex", "pattern": "^REVIEW COMPLETE: FAIL \\[?\\d+\\]? issues?$", "note": "Brackets are OPTIONAL by design. '[N]' is this repo's placeholder notation (cf. 'HARD STOP: [reason]'), so an agent that renders it literally emits 'FAIL [3] issues'. A \\d+-only pattern rejected that and the orchestrator misread a valid FAIL verdict as subagent confusion, firing a needless inline fallback."}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/review", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`REVIEW COMPLETE: PASS` \\| `REVIEW COMPLETE: FAIL [N] issues`"}
+      "display": {"command": "/review", "model": "sonnet", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`REVIEW COMPLETE: PASS` \\| `REVIEW COMPLETE: FAIL [N] issues`"}
     },
     {
       "n": 5,
@@ -99,11 +131,15 @@
       "inline_fallback_eligible": false,
       "primary_signal": {"value": "INTEGRATE COMPLETE", "match_mode": "literal"},
       "special_signals": [
+        {"value": "INTEGRATE NO-OP:", "match_mode": "prefix"},
         {"value": "NEEDS_CONTEXT", "match_mode": "regex", "pattern": "^NEEDS_CONTEXT(:\\s.+)?$"},
         {"value": "3-STRIKE LIMIT", "match_mode": "regex", "pattern": "^3-STRIKE LIMIT(:\\s.+)?$"}
       ],
+      "transitions": [
+        {"on_signal": "INTEGRATE NO-OP:", "skip": [6], "match_mode": "prefix", "note": "Skip Re-review only when Phase 5 and the orchestrator independently verify the declared zero-finding, zero-triage, identical-HEAD, and identical-worktree-digest guard. Missing or mismatched evidence fails closed to INTEGRATE COMPLETE and Phase 6."}
+      ],
       "verdict_in_body": false,
-      "display": {"command": "/integrate", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`INTEGRATE COMPLETE`"}
+      "display": {"command": "/integrate", "model": "sonnet", "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`INTEGRATE COMPLETE` \\| `INTEGRATE NO-OP`"}
     },
     {
       "n": 6,
@@ -118,7 +154,7 @@
         {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
       ],
       "verdict_in_body": true,
-      "display": {"command": "/re-review", "model": "opus", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`RE-REVIEW COMPLETE` (verdict in body)"}
+      "display": {"command": "/re-review", "model": "sonnet", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`RE-REVIEW COMPLETE` (verdict in body)"}
     },
     {
       "n": 7,
@@ -136,7 +172,7 @@
         {"on_signal": "README SKIPPED", "skip": [8], "match_mode": "prefix", "note": "on_signal is prefix-matched against the emitted 'README SKIPPED: [reason]'. Phase 7 self-skip cascades to skip Phase 8 (README Review) even in standard/max lanes where 8 is in the lane list."}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/readme", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`README COMPLETE` \\| `README SKIPPED`"}
+      "display": {"command": "/readme", "model": "sonnet", "strategy_note": null, "recipe_note": null, "fallback_note": null, "signal_display": "`README COMPLETE` \\| `README SKIPPED`"}
     },
     {
       "n": 8,
@@ -151,7 +187,7 @@
         {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
       ],
       "verdict_in_body": true,
-      "display": {"command": "/readme-review", "model": "haiku", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`README REVIEW COMPLETE` (verdict in body)"}
+      "display": {"command": "/readme-review", "model": "sonnet", "strategy_note": "#164", "recipe_note": null, "fallback_note": null, "signal_display": "`README REVIEW COMPLETE` (verdict in body)"}
     },
     {
       "n": 9,
@@ -166,7 +202,7 @@
         {"value": "RELEASE GATE FAILED", "match_mode": "regex", "pattern": "^RELEASE GATE FAILED: .+$"}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/release", "model": null, "strategy_note": null, "recipe_note": "codifies inline path", "fallback_note": "already inline", "signal_display": "`RELEASE GATE PASSED` \\| `RELEASE GATE FAILED: [reason]`"}
+      "display": {"command": "/release", "model": "sonnet", "strategy_note": null, "recipe_note": "codifies inline path", "fallback_note": "already inline", "signal_display": "`RELEASE GATE PASSED` \\| `RELEASE GATE FAILED: [reason]`"}
     },
     {
       "n": 10,
@@ -178,10 +214,15 @@
       "inline_fallback_eligible": false,
       "primary_signal": {"value": "LEARNING CAPTURED", "match_mode": "literal"},
       "special_signals": [
+        {"value": "LEARNING SKIPPED:", "match_mode": "prefix"},
         {"value": "COMPLETE_WITH_CONCERNS", "match_mode": "literal"}
       ],
       "verdict_in_body": false,
-      "display": {"command": "/learning", "model": null, "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis", "signal_display": "`LEARNING CAPTURED`"}
+      "delegation_policy": {
+        "claude": {"nominal_work_sec": 270, "idle_sec": 90, "productive_extension_sec": 90, "finalization_sec": 60, "absolute_sec": 420, "recent_progress_sec": 15, "cleanup_margin_sec": 30},
+        "codex": {"synthesis_due_sec": 270, "grace_sec": 60, "recent_progress_sec": 60, "wait_window_max_sec": 60, "resume_window_count": 2, "resume_window_sec": 60, "terminal_states": ["completed", "native_completion_stalled"], "initial_classifications": ["completed", "productive_budget_exhausted", "interrupted_after_grace"], "synthesis_instruction": "No more tools. Return the phase artifact now from current evidence; list missing sources instead of researching further."}
+      },
+      "display": {"command": "/learning", "model": "sonnet", "strategy_note": null, "recipe_note": null, "fallback_note": "synthesis — bounded primary takeover", "signal_display": "`LEARNING CAPTURED` \\| `LEARNING SKIPPED`"}
     }
   ]
 }

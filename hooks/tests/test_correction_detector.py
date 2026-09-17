@@ -254,7 +254,7 @@ class TestLoadedContextFalsePositives:
             '<system-reminder>\n'
             '# auto memory\n'
             'For path handling on Windows, instead of os.path.join, use pathlib.Path.\n'
-            'Do not commit, instead of direct pushes, use PR workflow.\n'
+            'Do not commit, instead of direct pushes, use MR workflow.\n'
             '</system-reminder>\n'
         )
         turn_content = memory_block + 'please review the change'

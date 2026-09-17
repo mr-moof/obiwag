@@ -7,7 +7,7 @@ Moved here from CLAUDE.md to keep the main file lean — only universally essent
 
 ## Git Workflow
 
-**Obi Wag repos (obiwag-agents, single maintainer):** Commit direct to master. No feature branch / PR ceremony required.
+**Obi Wag repos (obiwag-agents, single maintainer):** Commit direct to main. No feature branch / MR ceremony required.
 
 **Branch prefixes (when a branch IS used, e.g. for parallel work or risky changes):** `feature/`, `fix/`, `docs/`, `refactor/`
 
@@ -18,8 +18,8 @@ Moved here from CLAUDE.md to keep the main file lean — only universally essent
 ## Testing
 
 ```bash
-cd ~/.claude/hooks && python -m pytest tests/       # Run all hook tests
-python -m pytest tests/test_memory_reader.py -v     # Run specific test
+python -m pytest hooks/tests/                       # Run all hook tests
+python -m pytest hooks/tests/test_memory_reader.py -v  # Run specific test
 ```
 
 Before committing: Run hook tests, verify CLAUDE.md references resolve, test affected commands.
@@ -62,7 +62,7 @@ graphify update .
 
 Outputs land in `graphify-out/`. Inspect:
 
-- `GRAPH_REPORT.md` — human-readable summary; commit it.
+- `GRAPH_REPORT.md` — human-readable summary; inspect it locally, but do not commit it.
 - `graph.html` — interactive browser visualization (4-5 MB; not committed).
 - `graph.json` — full graph data for tooling (6-7 MB; not committed).
 
@@ -70,7 +70,7 @@ Outputs land in `graphify-out/`. Inspect:
 
 | Artifact | Commit? | Why |
 |----------|---------|-----|
-| `GRAPH_REPORT.md` | yes | Small, diff-readable, useful in reviews. |
+| `GRAPH_REPORT.md` | no | Generated and gitignored; inspect locally and regenerate as needed. |
 | `graph.json` | no | 6+ MB; regenerated each run; bloats history. |
 | `graph.html` | no | 4+ MB; binary-ish; same regeneration story. |
 | `cache/` | no | Per-machine working set. |

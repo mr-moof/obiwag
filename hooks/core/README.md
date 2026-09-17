@@ -43,18 +43,20 @@ if result['should_checkpoint']:
 
 ## Additional Core Modules
 
-Other modules in this directory:
+This directory holds ~39 modules; an inline list here goes stale the moment one is
+added or removed (it documented the deleted `git_sync.py` for two releases). Use the
+generated/authoritative sources instead:
 
-- **calibration.py** - Loads calibration settings from `~/.claude/.obi/calibration.md`
-- **correction_retriever.py** - RAG-style correction injection based on past session corrections
-- **git_sync.py** - Git operations for syncing learnings to source repo
-- **hook_logger.py** - Timing and logging for hook execution
-- **learning_detector.py** - Detects learnable content from session transcripts
-- **memory_reader.py** - Read/write session summaries and memory files
-- **pattern_matcher.py** - Task type detection and grounding source injection
-- **drift_detector.py** - Drift detection between deployed and source repo files
-- **session_state.py** - Per-session state management
-- **version.py** - Version info and update checking
+- **Architecture and per-hook call graph:** [`docs/hooks-architecture.md`](../../docs/hooks-architecture.md)
+- **Which detectors run in which hook, in order:** [`detector_registry.py`](detector_registry.py)
+- **What gets deployed:** the `core` list in [`tools/lib/hook-manifest.json`](../../tools/lib/hook-manifest.json)
+- **Everything on disk:** `ls hooks/core/*.py`
+
+Removal notes worth keeping:
+
+
+- *(removed 0.69.88)* `git_sync.py` — learning-sync git operations. Reachable only through the lazy re-export map in this package's `__init__.py`; no caller anywhere in the repo.
+- *(removed 0.69.88)* `stop_advisories.py` — its detectors moved to `detector_registry.py` in OPT-15, leaving `run_shutdown_advisories` returning `None` unconditionally while still costing the Stop hook a deadline check, an import, and a timer.
 
 ## Dependencies
 

@@ -23,6 +23,11 @@ from core.hook_logger import HookTimer
 
 
 HookHandler = Callable[[Dict[str, Any], HookTimer], Optional[Dict[str, Any]]]
+MAX_HOOK_INPUT_CHARS = 8 * 1024 * 1024
+
+
+class HookInputTooLarge(ValueError):
+    """Claude supplied more hook input than can be processed within the hook budget."""
 
 
 def read_hook_input(stream: Optional[TextIO] = None) -> Dict[str, Any]:
@@ -31,13 +36,22 @@ def read_hook_input(stream: Optional[TextIO] = None) -> Dict[str, Any]:
     Returns ``{}`` if the stream is empty, missing, or contains invalid
     JSON. This mirrors what every hook used to do inline — Claude Code may
     invoke a hook with no stdin payload (e.g. test runs), and that must
-    not be fatal.
+    not be fatal. Input is capped at ``MAX_HOOK_INPUT_CHARS`` so a malformed
+    or unexpectedly huge tool result cannot consume the hook's entire external
+    deadline. Oversized input raises ``HookInputTooLarge`` and is surfaced by
+    ``run_hook`` through the normal hook-error path.
     """
     if stream is None:
         stream = sys.stdin
     try:
-        return json.load(stream) or {}
-    except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
+        raw = stream.read(MAX_HOOK_INPUT_CHARS + 1)
+        if len(raw) > MAX_HOOK_INPUT_CHARS:
+            raise HookInputTooLarge(
+                f"hook input exceeds {MAX_HOOK_INPUT_CHARS} characters"
+            )
+        parsed = json.loads(raw) if raw.strip() else {}
+        return parsed or {}
+    except (json.JSONDecodeError, TypeError, AttributeError):
         return {}
 
 
@@ -95,6 +109,7 @@ def run_hook(
 
 __all__ = [
     'HookHandler',
+    'HookInputTooLarge',
     'read_hook_input',
     'emit_hook_output',
     'run_hook',

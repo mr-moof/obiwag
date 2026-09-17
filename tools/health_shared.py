@@ -26,17 +26,25 @@ def color(text: str, color_code: str) -> str:
     return f"{color_code}{text}{RESET}"
 
 
-# Valid model prefixes — agents must use one of these
+# Valid model identifiers — agents/settings should use an always-latest ALIAS
+# (fable, opus, sonnet) or a full provider ID. Aliases are preferred: the model
+# then tracks the latest generation automatically (policy: always latest of a
+# type). Frontier phases (Discovery, Author) and the Claude peer use `fable`
+# (the user, 2026-09-01); the balanced phases use `sonnet`. 'haiku'/'claude-haiku-'
+# are deliberately EXCLUDED — never use haiku; migrate such agents to sonnet. Not
+# currently imported by any checker (kept as the documented allowlist).
 VALID_MODEL_PREFIXES = [
-    'claude-opus-4',
-    'claude-sonnet-4',
+    'fable',
+    'opus',
+    'sonnet',
+    'claude-fable-',
+    'claude-opus-',
+    'claude-sonnet-',
     'gemini-',
     'gpt-',
 ]
 
-# Minimum model versions per provider (used for freshness check).
-# Update these when new model generations ship.
-MINIMUM_MODEL_VERSIONS = {
-    'claude-opus': 'claude-opus-4.6',
-    'claude-sonnet': 'claude-sonnet-4.6',
-}
+# Aliases always resolve to the latest generation, so there is no freshness
+# floor to enforce. Left empty intentionally; populate only if pinned full-ID
+# models are reintroduced and need a minimum-version nag.
+MINIMUM_MODEL_VERSIONS = {}

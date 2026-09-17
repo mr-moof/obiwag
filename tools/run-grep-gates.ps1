@@ -48,7 +48,14 @@
     are evaluated. Required in plan mode; ignored with -VersionDrift.
 
 .PARAMETER RepoRoot
-    Root directory to scan. Defaults to the repo root inferred from $PSScriptRoot.
+    Root directory to scan. Defaults to the git top-level of the CURRENT WORKING
+    DIRECTORY, falling back to the repo root inferred from $PSScriptRoot when the
+    cwd is not a git work tree.
+
+    The cwd-first default matters: this script is invoked from the deployed
+    $env:OBI_HOME copy (the configured shared runtime), so
+    inferring the root from $PSScriptRoot resolved to obi-tools and silently
+    scanned the WRONG repo — every gate reported "clean" for any other project.
 
 .PARAMETER VersionDrift
     Run the standalone version-drift gate instead of the plan-driven grep gate.
@@ -61,8 +68,8 @@
     Does not require -PlanPath / -Phase.
 
 .NOTES
-    Implementation: prefer `rg --json` if available; fall back to PowerShell
-    Select-String. Allow-files post-filtered via -notmatch.
+    Implementation: PowerShell Select-String only, for portability (rg may be
+    missing on test boxes). Allow-files post-filtered via -notmatch.
     Scripts cannot call Claude's Grep tool; this uses real process/file APIs.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Plan')]
@@ -77,7 +84,16 @@ param(
 $ErrorActionPreference = 'Continue'
 
 if (-not $RepoRoot) {
-    $RepoRoot = Split-Path -Parent $PSScriptRoot
+    # Prefer the git top-level of the cwd: callers run the DEPLOYED copy under
+    # $env:OBI_HOME, so $PSScriptRoot points at obi-tools, not the repo under
+    # test. Falling back to $PSScriptRoot keeps the old behavior for a caller
+    # that runs this from inside its own repo with no git available.
+    $gitTop = & git rev-parse --show-toplevel 2>$null
+    if ($LASTEXITCODE -eq 0 -and $gitTop) {
+        $RepoRoot = ($gitTop | Select-Object -First 1).Trim() -replace '/', '\'
+    } else {
+        $RepoRoot = Split-Path -Parent $PSScriptRoot
+    }
 }
 
 # ---------------------------------------------------------------------------

@@ -42,16 +42,16 @@ class CommandRule:
 
 # ---------------------------------------------------------------------------
 # Restricted npm binaries — separate list because they have a distinct
-# domain (execution allow-listing, not "use a dedicated tool").
+# domain (AppLocker policy, not "use a dedicated tool").
 # ---------------------------------------------------------------------------
 
 RESTRICTED_NPM_RULES: List[CommandRule] = [
     CommandRule(
-        id="npm-serve-restricted",
+        id="npm-serve-applocker",
         pattern=r"npx\s+(serve|http-server)\b",
         message=(
-            "npx serve/http-server can be blocked by execution allow-listing in "
-            "some environments — use `python -m http.server <port>` instead."
+            "npx serve/http-server is blocked by AppLocker outside C:\\source. "
+            "Use 'python -m http.server <port> --directory <path>' instead."
         ),
     ),
 ]

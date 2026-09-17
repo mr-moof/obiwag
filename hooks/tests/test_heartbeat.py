@@ -5,13 +5,12 @@ import os
 import sys
 from pathlib import Path
 
-import pytest
 
 # Add parent directory to path for imports
 HOOKS_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
 
-import post_tool_use
+import post_tool_use  # noqa: E402  (sys.path is set up above)
 
 
 def _reset_heartbeat_cache():
@@ -71,6 +70,8 @@ class TestHeartbeatTouch:
     def test_cache_prevents_rereading_run_id(self, tmp_path, monkeypatch):
         _reset_heartbeat_cache()
         monkeypatch.chdir(tmp_path)
+        # Two touches in a row would otherwise be collapsed by the throttle.
+        monkeypatch.setattr(post_tool_use, "_HEARTBEAT_MIN_INTERVAL_SEC", 0.0)
 
         state_dir = tmp_path / ".obi" / "state"
         state_dir.mkdir(parents=True)
@@ -96,6 +97,7 @@ class TestHeartbeatTouch:
     def test_overwrites_previous_heartbeat(self, tmp_path, monkeypatch):
         _reset_heartbeat_cache()
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(post_tool_use, "_HEARTBEAT_MIN_INTERVAL_SEC", 0.0)
 
         state_dir = tmp_path / ".obi" / "state"
         state_dir.mkdir(parents=True)
@@ -109,3 +111,26 @@ class TestHeartbeatTouch:
 
         assert first["tool"] == "Read"
         assert second["tool"] == "Edit"
+
+    def test_throttles_writes_within_the_interval(self, tmp_path, monkeypatch):
+        """PostToolUse fires on every tool call; the heartbeat is only a
+        staleness signal, so a fresh file must NOT be rewritten each time."""
+        _reset_heartbeat_cache()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(post_tool_use, "_HEARTBEAT_MIN_INTERVAL_SEC", 60.0)
+
+        state_dir = tmp_path / ".obi" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "run-id.txt").write_text("throttle-test")
+        hb_path = state_dir / "heartbeat-throttle-test.json"
+
+        post_tool_use._touch_heartbeat("Read")
+        post_tool_use._touch_heartbeat("Edit")
+
+        assert json.loads(hb_path.read_text())["tool"] == "Read"
+
+        # A stale heartbeat (mtime pushed into the past) is rewritten.
+        stale = os.path.getmtime(hb_path) - 120
+        os.utime(hb_path, (stale, stale))
+        post_tool_use._touch_heartbeat("Edit")
+        assert json.loads(hb_path.read_text())["tool"] == "Edit"

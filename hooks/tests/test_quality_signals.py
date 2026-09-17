@@ -315,11 +315,10 @@ class TestWriteQualitySignalsJsonl:
     def test_calls_rotate(self, tmp_path):
         signals = {"edit_without_read": [], "file_thrashing": {}, "over_building_corrections": 0}
         with patch("core.quality_signals.Path.home", return_value=tmp_path), \
-             patch("core.hook_logger._rotate_log_if_needed") as mock_rotate:
+             patch("core.hook_logger.append_rotating_jsonl") as mock_append:
             obi_dir = tmp_path / ".claude" / ".obi"
             obi_dir.mkdir(parents=True)
 
             write_quality_signals_jsonl("test", "unknown", signals)
-            mock_rotate.assert_called_once()
-            call_args = mock_rotate.call_args
-            assert call_args[1]["max_size_bytes"] == 500_000 or call_args[0][1] == 500_000
+            mock_append.assert_called_once()
+            assert mock_append.call_args.kwargs["max_size_bytes"] == 500_000

@@ -7,7 +7,6 @@ PEP 562 module-level ``__getattr__``, so the eager import cost that every hook
 invocation used to pay is gone.
 """
 
-import importlib
 import subprocess
 import sys
 
@@ -62,7 +61,7 @@ def test_core_init_has_no_eager_submodule_imports():
     snippet = (
         "import sys; import core; "
         "leaked = [m for m in ('core.version', 'core.learning_detector', "
-        "'core.git_sync', 'core.calibration', 'yaml') if m in sys.modules]; "
+        "'core.memory_reader', 'core.calibration', 'yaml') if m in sys.modules]; "
         "assert not leaked, f'eager imports leaked: {leaked}'; "
         "print('NO EAGER OK')"
     )

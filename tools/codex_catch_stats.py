@@ -20,6 +20,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, List, Optional, Tuple
 
 # Resolve hooks/ alongside this tool so the script runs from any cwd.
@@ -89,8 +90,18 @@ def is_confirmed(entry: Dict[str, Any]) -> bool:
 def compute_stats(
     entries: List[Dict[str, Any]], days: int = 90
 ) -> Dict[str, Any]:
-    """Compute aggregated statistics from catch entries."""
-    deduped = deduplicate_catches(entries)
+    """Compute Codex-only statistics from the provider-attributed catch log.
+
+    Historical entries predate ``peer_provider`` and are Codex catches by
+    construction, so a missing field remains backward-compatible Codex.
+    """
+    codex_entries = [
+        entry for entry in entries
+        if entry.get("peer_provider", "codex") == "codex"
+    ]
+    attempts = [entry for entry in codex_entries if entry.get("record_type") == "attempt"]
+    findings = [entry for entry in codex_entries if entry.get("record_type") != "attempt"]
+    deduped = deduplicate_catches(findings)
     total = len(deduped)
 
     # Counts by category
@@ -145,6 +156,19 @@ def compute_stats(
         else None
     )
 
+    durations = [
+        entry["duration_ms"] for entry in attempts
+        if isinstance(entry.get("duration_ms"), int) and entry["duration_ms"] >= 0
+    ]
+    accepted = sum(
+        entry.get("accepted_count", 0) for entry in attempts
+        if isinstance(entry.get("accepted_count", 0), int)
+    )
+    attempts_with_accepted = sum(
+        1 for entry in attempts if entry.get("accepted_count", 0) > 0
+    )
+    attempt_count = len(attempts)
+
     return {
         "total": total,
         "confirmed": confirmed_count,
@@ -158,12 +182,29 @@ def compute_stats(
         "dispute_win_rate": win_rate,
         "trend_days": days,
         "trend_count": trend_count,
+        "attempts": attempt_count,
+        "zero_finding_attempts": sum(
+            1 for entry in attempts if entry.get("finding_count") == 0
+        ),
+        "attempts_with_accepted": attempts_with_accepted,
+        "attempt_acceptance_rate": (
+            round(attempts_with_accepted / attempt_count, 2) if attempt_count else None
+        ),
+        "accepted_per_attempt": round(accepted / attempt_count, 2) if attempt_count else None,
+        "pass_ids": sorted({
+            str(entry["pass_id"]) for entry in attempts if entry.get("pass_id")
+        }),
+        "attempt_duration_ms": {
+            "count": len(durations),
+            "median": median(durations) if durations else None,
+            "total": sum(durations),
+        },
     }
 
 
 def _format_table(stats: Dict[str, Any]) -> str:
     """Render a compact human-readable summary."""
-    if stats["total"] == 0:
+    if stats["total"] == 0 and stats["attempts"] == 0:
         return "No Codex catches recorded."
 
     lines = []
@@ -182,6 +223,20 @@ def _format_table(stats: Dict[str, Any]) -> str:
         f"(codex={stats['codex_right']} claude={stats['claude_right']} "
         f"unresolved={stats['unresolved']})"
     )
+
+    if stats["attempts"]:
+        rate = stats["attempt_acceptance_rate"]
+        rate_text = f"{rate:.0%}" if rate is not None else "n/a"
+        duration = stats["attempt_duration_ms"]
+        lines.append(
+            f"Attempts: {stats['attempts']}  Zero findings: {stats['zero_finding_attempts']}  "
+            f"Accepted-pass rate: {rate_text}  Accepted/attempt: {stats['accepted_per_attempt']:.2f}"
+        )
+        lines.append(
+            f"Attempt duration ms: median={duration['median']} total={duration['total']} "
+            f"observed={duration['count']}"
+        )
+        lines.append(f"Pass IDs: {', '.join(stats['pass_ids']) or 'n/a'}")
 
     lines.append(
         f"\n{stats['trend_days']}-day trend: {stats['trend_count']} catches"

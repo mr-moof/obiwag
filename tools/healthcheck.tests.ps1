@@ -5,10 +5,10 @@
 .DESCRIPTION
     Tests the Python health check script via integration: validates core module lists,
     phase command maps, deployment checks, and script execution.
-    Uses isolated temp directories. Compatible with Pester 3.4.0+.
+    Uses isolated temp directories. Requires Pester 5.
 
 .EXAMPLE
-    Invoke-Pester C:\Users\user\source\obiwag-agents\tools\healthcheck.tests.ps1
+    .\tools\run-tests.ps1 -Path tools\healthcheck.tests.ps1
 #>
 
 Describe 'Health Check Script' {
@@ -35,58 +35,58 @@ Describe 'Health Check Script' {
         It 'Lists all core modules that exist in the repo' {
             # Actual core modules from the hooks/core/ directory
             $actualModules = @(
-                'calibration.py', 'correction_retriever.py', 'drift_detector.py',
-                'git_sync.py', 'hook_logger.py', 'learning_detector.py',
+                'calibration.py', 'drift_detector.py',
+                'hook_logger.py', 'learning_detector.py',
                 'memory_reader.py', 'pattern_matcher.py', 'session_state.py',
                 'strike_counter.py', 'version.py'
             )
 
             # What healthcheck.py should check (excluding __init__.py)
             $healthcheckModules = @(
-                'calibration.py', 'correction_retriever.py', 'drift_detector.py',
-                'git_sync.py', 'hook_logger.py', 'learning_detector.py',
+                'calibration.py', 'drift_detector.py',
+                'hook_logger.py', 'learning_detector.py',
                 'memory_reader.py', 'pattern_matcher.py', 'session_state.py',
                 'strike_counter.py', 'version.py'
             )
 
             # Verify the lists match
             $missing = $actualModules | Where-Object { $_ -notin $healthcheckModules }
-            $missing.Count | Should Be 0
+            $missing.Count | Should -Be 0
         }
 
         It 'Matches config-guardian core modules list (minus __init__.py)' {
             # config-guardian.ps1 CoreModules (the authoritative list)
             $guardianModules = @(
-                '__init__.py', 'calibration.py', 'correction_retriever.py',
-                'drift_detector.py', 'git_sync.py', 'hook_logger.py',
+                '__init__.py', 'calibration.py',
+                'drift_detector.py', 'hook_logger.py',
                 'learning_detector.py', 'memory_reader.py', 'pattern_matcher.py',
                 'session_state.py', 'strike_counter.py', 'version.py'
             )
 
-            # healthcheck.py modules (should include correction_retriever and drift_detector)
+            # healthcheck.py modules (should include drift_detector)
             $healthcheckModules = @(
-                'calibration.py', 'correction_retriever.py', 'drift_detector.py',
-                'git_sync.py', 'hook_logger.py', 'learning_detector.py',
+                'calibration.py', 'drift_detector.py',
+                'hook_logger.py', 'learning_detector.py',
                 'memory_reader.py', 'pattern_matcher.py', 'session_state.py',
                 'strike_counter.py', 'version.py'
             )
 
             $nonInit = $guardianModules | Where-Object { $_ -ne '__init__.py' }
             $missing = $nonInit | Where-Object { $_ -notin $healthcheckModules }
-            $missing.Count | Should Be 0
+            $missing.Count | Should -Be 0
         }
 
         It 'Verifies each core module file exists in repo' {
             $coreDir = Join-Path $RepoRoot 'hooks\core'
             $expectedModules = @(
-                '__init__.py', 'calibration.py', 'correction_retriever.py',
-                'drift_detector.py', 'git_sync.py', 'hook_logger.py',
+                '__init__.py', 'calibration.py',
+                'drift_detector.py', 'hook_logger.py',
                 'learning_detector.py', 'memory_reader.py', 'pattern_matcher.py',
                 'session_state.py', 'strike_counter.py', 'version.py'
             )
 
             foreach ($mod in $expectedModules) {
-                (Test-Path (Join-Path $coreDir $mod)) | Should Be $true
+                (Test-Path (Join-Path $coreDir $mod)) | Should -Be $true
             }
         }
     }
@@ -107,7 +107,7 @@ Describe 'Health Check Script' {
                 '10-learning'      = 'learning.md'
             }
 
-            $phaseCommandMap.Count | Should Be 10
+            $phaseCommandMap.Count | Should -Be 10
         }
 
         It 'Matches actual phase directories in repo' {
@@ -119,7 +119,7 @@ Describe 'Health Check Script' {
             )
 
             foreach ($phase in $expectedPhases) {
-                (Test-Path (Join-Path $phasesDir $phase)) | Should Be $true
+                (Test-Path (Join-Path $phasesDir $phase)) | Should -Be $true
             }
         }
 
@@ -128,7 +128,7 @@ Describe 'Health Check Script' {
             $phases = Get-ChildItem -Path $phasesDir -Directory | Where-Object { $_.Name -match '^\d+' }
 
             foreach ($phase in $phases) {
-                (Test-Path (Join-Path $phase.FullName 'command.md')) | Should Be $true
+                (Test-Path (Join-Path $phase.FullName 'command.md')) | Should -Be $true
             }
         }
     }
@@ -141,10 +141,10 @@ Describe 'Health Check Script' {
         It 'Checks orchestration commands beyond phase commands' {
             # healthcheck.py checks these extra commands
             $extraCommands = @('obi.md', 'obi-auto.md', 'obi-memory-review.md', 'obi-swarm.md',
-                               'obi-collect.md', 'obi-update.md', 'doc.md')
+                               'obi-collect.md', 'obi-update.md')
 
             # All should be checked by healthcheck
-            $extraCommands.Count | Should BeGreaterThan 0
+            $extraCommands.Count | Should -BeGreaterThan 0
         }
 
         It 'Checks agent deployment' {
@@ -153,7 +153,23 @@ Describe 'Health Check Script' {
                 'obi-rereviewer.md', 'obi-readme-verifier.md',
                 'obi-swarm-worker.md'
             )
-            $expectedAgents.Count | Should Be 5
+            $expectedAgents.Count | Should -Be 5
+        }
+
+        It 'checks the canonical peer harness and rejects legacy installs' {
+            $source = Get-Content -LiteralPath $HealthCheckPy -Raw
+            $source | Should -Match 'def check_peer_review_harness'
+            $source | Should -Not -Match 'def check_codex_review_profile'
+            foreach ($required in @(
+                'peer-review.ps1', 'peer-review.py', 'peer_review/adapters.py',
+                'peer_review/broker.py',
+                'peer_review/runner.py', 'peer-review-result.schema.json',
+                'peer-review-status.schema.json', 'peer-review.md'
+            )) {
+                $source | Should -Match ([regex]::Escape($required))
+            }
+            $source | Should -Match 'codex-adversarial-review'
+            $source | Should -Match 'codex-run.ps1'
         }
     }
 
@@ -162,9 +178,9 @@ Describe 'Health Check Script' {
         It 'Extracts version from version.yaml' {
             $versionYaml = Join-Path $RepoRoot 'tools\version.yaml'
             $content = Get-Content $versionYaml -Raw
-            ($content -match 'version:\s*"([^"]+)"') | Should Be $true
+            ($content -match 'version:\s*"([^"]+)"') | Should -Be $true
             $version = $Matches[1]
-            ($version -match '^\d+\.\d+') | Should Be $true
+            ($version -match '^\d+\.\d+') | Should -Be $true
         }
 
         It 'Extracts version from deployed CLAUDE.md' {
@@ -173,11 +189,41 @@ Describe 'Health Check Script' {
                 $content = Get-Content $claudeMd -Raw
                 if ($content -match '\*\*Version:\*\*\s*([0-9.]+)') {
                     $version = $Matches[1]
-                    ($version -match '^\d+\.\d+') | Should Be $true
+                    ($version -match '^\d+\.\d+') | Should -Be $true
                 }
             }
             # If CLAUDE.md doesn't exist, this is still valid (undeployed state)
-            $true | Should Be $true
+            $true | Should -Be $true
+        }
+
+        It 'compares deployed CLAUDE.md by hash instead of a retired version header' {
+            $source = Get-Content -LiteralPath $HealthCheckPy -Raw
+            $source | Should -Match 'Deployed CLAUDE\.md matches source'
+            $source | Should -Not -Match 'Deployed CLAUDE\.md has no version header'
+        }
+
+        It 'models project permission arrays as merged and never recommends deletion' {
+            $source = Get-Content -LiteralPath $HealthCheckPy -Raw
+            $source | Should -Match 'arrays merge across scopes'
+            $source | Should -Not -Match 'PROJECT-LOCAL OVERRIDE'
+            $source | Should -Not -Match 'Fix: Delete'
+        }
+
+        It 'checks stale and unconsumed durable peer-review obligations' {
+            $source = Get-Content -LiteralPath $HealthCheckPy -Raw
+            $source | Should -Match 'def check_peer_review_runs'
+            $source | Should -Match 'Unconsumed terminal peer result'
+            $source | Should -Match 'Stale peer broker heartbeat'
+            $source | Should -Match 'Unverified peer process-tree termination'
+            $source | Should -Match 'use_lock=True'
+        }
+
+        It 'checks archive-run-state deployment presence and hash' {
+            $source = Get-Content -LiteralPath $HealthCheckPy -Raw
+            $source | Should -Match 'archive-run-state\.ps1'
+            $source | Should -Match 'lib/path-safety\.ps1'
+            $source | Should -Match 'def check_deployed_tool_hash'
+            $source | Should -Match "check_deployed_tool_hash\(relative, 'Workflow safety tool'\)"
         }
     }
 
@@ -188,7 +234,7 @@ Describe 'Health Check Script' {
                               'skills', 'users', 'docs', 'tools')
 
             foreach ($dir in $requiredDirs) {
-                (Test-Path (Join-Path $RepoRoot $dir)) | Should Be $true
+                (Test-Path (Join-Path $RepoRoot $dir)) | Should -Be $true
             }
         }
 
@@ -199,38 +245,57 @@ Describe 'Health Check Script' {
                           'approval-gates.md')
 
             foreach ($policy in $policies) {
-                (Test-Path (Join-Path $policiesDir $policy)) | Should Be $true
+                (Test-Path (Join-Path $policiesDir $policy)) | Should -Be $true
             }
         }
 
         It 'Version file exists' {
-            (Test-Path (Join-Path $RepoRoot 'tools\version.yaml')) | Should Be $true
+            (Test-Path (Join-Path $RepoRoot 'tools\version.yaml')) | Should -Be $true
         }
 
         It 'CLAUDE.md exists at repo root' {
-            (Test-Path (Join-Path $RepoRoot 'CLAUDE.md')) | Should Be $true
+            (Test-Path (Join-Path $RepoRoot 'CLAUDE.md')) | Should -Be $true
         }
     }
 
     Context 'Python Integration' {
 
         It 'Python executable exists' {
-            (Test-Path $PythonExe) | Should Be $true
+            (Test-Path $PythonExe) | Should -Be $true
         }
 
         It 'healthcheck.py exists' {
-            (Test-Path $HealthCheckPy) | Should Be $true
+            (Test-Path $HealthCheckPy) | Should -Be $true
         }
 
         It 'healthcheck.py has valid Python syntax' {
             $result = & $PythonExe -c "import py_compile; py_compile.compile(r'$HealthCheckPy', doraise=True)" 2>&1
-            $LASTEXITCODE | Should Be 0
+            $LASTEXITCODE | Should -Be 0
         }
 
         It 'healthcheck.py --help returns usage info' {
             $result = & $PythonExe $HealthCheckPy --help 2>&1
             $output = $result -join "`n"
-            $output | Should Match 'health check'
+            $output | Should -Match 'health check'
+            $output | Should -Match '--repo-root'
+        }
+
+        It 'resolves the source repo from CLAUDE_PROJECT_ROOT when running under OBI_HOME' {
+            $fakeScriptDir = Join-Path $TempRoot 'obi-tools\tools'
+            New-Item -ItemType Directory -Path $fakeScriptDir -Force | Out-Null
+            $code = @"
+import os
+import sys
+from pathlib import Path
+sys.path.insert(0, r'$($RepoRoot)\tools')
+from healthcheck import resolve_repo_root
+os.environ['CLAUDE_PROJECT_ROOT'] = r'$RepoRoot'
+print(resolve_repo_root(Path(r'$fakeScriptDir')))
+"@
+            $result = & $PythonExe -c $code 2>&1
+            $LASTEXITCODE | Should -Be 0
+            [System.IO.Path]::GetFullPath(($result | Select-Object -Last 1)) |
+                Should -Be ([System.IO.Path]::GetFullPath($RepoRoot))
         }
     }
 
@@ -246,7 +311,7 @@ Describe 'Health Check Script' {
             $hash1 = (Get-FileHash $file1 -Algorithm MD5).Hash.Substring(0, 8)
             $hash2 = (Get-FileHash $file2 -Algorithm MD5).Hash.Substring(0, 8)
 
-            $hash1 | Should Be $hash2
+            $hash1 | Should -Be $hash2
         }
 
         It 'Detects different content as drift' {
@@ -259,7 +324,7 @@ Describe 'Health Check Script' {
             $hash1 = (Get-FileHash $file1 -Algorithm MD5).Hash.Substring(0, 8)
             $hash2 = (Get-FileHash $file2 -Algorithm MD5).Hash.Substring(0, 8)
 
-            $hash1 | Should Not Be $hash2
+            $hash1 | Should -Not -Be $hash2
         }
     }
 
@@ -277,7 +342,7 @@ Describe 'Health Check Script' {
             }
 
             # Any of these states is valid for the test
-            ($status -in @('enabled', 'not set', 'disabled')) | Should Be $true
+            ($status -in @('enabled', 'not set', 'disabled')) | Should -Be $true
         }
     }
 }

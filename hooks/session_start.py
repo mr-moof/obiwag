@@ -19,7 +19,7 @@ HOOK_ROOT = os.path.dirname(os.path.abspath(__file__))
 if HOOK_ROOT not in sys.path:
     sys.path.insert(0, HOOK_ROOT)
 
-from core.paths import get_obi_platform, get_obi_root
+from core.paths import get_obi_root
 from core.hook_logger import log_swallowed
 
 
@@ -27,16 +27,15 @@ from core.hook_logger import log_swallowed
 GC_RETENTION_DAYS = 30
 MEMORY_MD_WARN_LINES = 150
 MEMORY_MD_HARD_CAP = 200
+# Claude currently allows five seconds for SessionStart.  Finish synchronous
+# work by three seconds so cold Python startup and output handling have room.
+SESSION_START_SOFT_BUDGET_SECONDS = 3.0
 
 
 def _resolve_project_working_dir():
-    """Pick the first existing project working directory.
-
-    Prefers C:/src then falls back to ~/source.  Returns None
-    if neither exists.
-    """
+    """Find the explicitly configured project root or the user's source folder."""
     candidates = [
-        r"C:\src",
+        os.environ.get("OBI_PROJECTS_ROOT", ""),
         os.path.join(os.path.expanduser("~"), "source"),
     ]
     for candidate in candidates:
@@ -45,12 +44,12 @@ def _resolve_project_working_dir():
     return None
 
 
-def _scan_projects_cached(working_dir):
+def _scan_projects_cached(working_dir, deadline_monotonic=None):
     """Return sorted subdirs of working_dir using an mtime-invalidated cache.
 
     Caches to ~/.claude/.obi/project-cache.json keyed by working_dir.
-    Cache hit: skip os.scandir entirely (avoids a per-session stat-storm
-    on slow or network filesystems).  Cache miss: rescan and rewrite.
+    Cache hit: skip os.scandir entirely (avoids per-session stat-storm
+    on network-profile remote desktops).  Cache miss: rescan and rewrite.
     """
     cache_path = str(get_obi_root() / ".obi" / "project-cache.json")
 
@@ -77,6 +76,8 @@ def _scan_projects_cached(working_dir):
     try:
         with os.scandir(working_dir) as entries:
             for entry in entries:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    return []
                 if entry.is_dir() and not entry.name.startswith("."):
                     projects.append(entry.name)
     except OSError:
@@ -94,7 +95,7 @@ def _scan_projects_cached(working_dir):
     return projects
 
 
-def _gc_old_files(directory, suffix, max_age_days):
+def _gc_old_files(directory, suffix, max_age_days, deadline_monotonic=None):
     """Prune files in `directory` ending in `suffix` older than `max_age_days`.
 
     Returns the count of files removed. Best-effort — never blocks startup.
@@ -107,6 +108,8 @@ def _gc_old_files(directory, suffix, max_age_days):
     removed = 0
     try:
         for entry in os.scandir(directory):
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                break
             if not entry.is_file() or not entry.name.endswith(suffix):
                 continue
             try:
@@ -120,18 +123,20 @@ def _gc_old_files(directory, suffix, max_age_days):
     return removed
 
 
-def _gc_maintenance(welcome_parts):
+def _gc_maintenance(welcome_parts, deadline_monotonic=None):
     """Best-effort GC of unbounded-growth dirs at session start."""
     try:
         sessions_pruned = _gc_old_files(
             str(get_obi_root() / ".obi" / "memory" / "sessions"),
             ".md",
             GC_RETENTION_DAYS,
+            deadline_monotonic,
         )
         todos_pruned = _gc_old_files(
             str(get_obi_root() / "todos"),
             ".json",
             GC_RETENTION_DAYS,
+            deadline_monotonic,
         )
         if sessions_pruned or todos_pruned:
             parts = []
@@ -148,7 +153,7 @@ def _gc_maintenance(welcome_parts):
         log_swallowed("gc_maintenance", exc)
 
 
-def _check_memory_md_size(welcome_parts):
+def _check_memory_md_size(welcome_parts, deadline_monotonic=None):
     """Warn if MEMORY.md is approaching the 200-line CLAUDE.md load truncation cap.
 
     CLAUDE.md states only the first 200 lines of MEMORY.md are loaded into
@@ -165,7 +170,13 @@ def _check_memory_md_size(welcome_parts):
         if not os.path.isfile(memory_path):
             return
         with open(memory_path, "r", encoding="utf-8") as f:
-            line_count = sum(1 for _ in f)
+            line_count = 0
+            for _ in f:
+                line_count += 1
+                if line_count > MEMORY_MD_HARD_CAP:
+                    break
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    return
         if line_count >= MEMORY_MD_WARN_LINES:
             welcome_parts.append(
                 f"\n[Maintenance] MEMORY.md is at {line_count}/{MEMORY_MD_HARD_CAP} lines "
@@ -177,53 +188,14 @@ def _check_memory_md_size(welcome_parts):
 
 
 def _cleanup_local_settings_regrowth(welcome_parts):
-    """Remove project settings.local.json files that shadow comprehensive user settings.
+    """Compatibility no-op; permission arrays merge across Claude scopes.
 
-    Claude Code auto-adds permissions to project-local settings, and if the
-    user's global settings already cover everything, the project files just
-    cause permission prompts. Best-effort cleanup — never blocks startup.
+    Older versions deleted a project file whenever its allow-list was shorter
+    than the user list.  That premise is false and could destroy intentional
+    local configuration.  Keep the callable for old tests/imports, but never
+    mutate settings here; healthcheck owns non-destructive diagnostics.
     """
-    try:
-        if get_obi_platform() != 'claude':
-            return
-        home = os.path.expanduser("~")
-        user_settings_path = str(get_obi_root() / "settings.json")
-        source_dir = os.path.join(home, "source")
-        if not (os.path.isdir(source_dir) and os.path.isfile(user_settings_path)):
-            return
-
-        with open(user_settings_path, 'r', encoding='utf-8') as f:
-            user_data = json.load(f)
-        user_perms = len(user_data.get('permissions', {}).get('allow', []))
-
-        if user_perms <= 50:
-            return  # Only clean if user has comprehensive settings.
-
-        cleaned = []
-        for entry in os.scandir(source_dir):
-            if not entry.is_dir():
-                continue
-            local_settings = os.path.join(entry.path, '.claude', 'settings.local.json')
-            if not os.path.isfile(local_settings):
-                continue
-            try:
-                with open(local_settings, 'r', encoding='utf-8') as f:
-                    local_data = json.load(f)
-                # Files managed by obi-deploy are intentional (Issue #74).
-                if local_data.get('_managed_by') == 'obi-deploy':
-                    continue
-                local_perms = len(local_data.get('permissions', {}).get('allow', []))
-                if 0 < local_perms < user_perms:
-                    os.remove(local_settings)
-                    cleaned.append(entry.name)
-            except Exception as exc:
-                log_swallowed("settings_regrowth_project", exc)
-        if cleaned:
-            welcome_parts.append(
-                f"\n[Maintenance] Cleaned settings.local.json from: {', '.join(cleaned)}"
-            )
-    except Exception as exc:
-        log_swallowed("settings_regrowth", exc)
+    del welcome_parts
 
 
 def _maintenance_marker_path():
@@ -264,43 +236,41 @@ def _record_maintenance_run(now=None):
         pass
 
 
-def _handle(input_data, timer):
-    from core.calibration import is_safety_enabled, load_calibration
-    from core.pattern_matcher import detect_task_type, get_injection_text
-    from core.version import get_version_display
+def _handle(input_data, timer, deadline_monotonic=None):
+    if deadline_monotonic is None:
+        deadline_monotonic = time.monotonic() + SESSION_START_SOFT_BUDGET_SECONDS
+    from core.hook_logger import HookTimer
 
-    timer.set_input_summary(
-        f"prompt={input_data.get('prompt', input_data.get('message', ''))[:50]}"
-    )
+    # SessionStart's payload carries session metadata and `source`
+    # (startup|resume|clear|compact) — never prompt text. Log that, not a
+    # phantom `prompt=` field.
+    timer.set_input_summary(f"source={input_data.get('source', 'unknown')}")
 
     # Persist the session-id sentinel so PostToolUse/PreCompact stay pinned to
     # one state file across an hour boundary (OPT-04 #177). Best-effort.
-    from core.memory_reader import generate_session_id
-    from core.session_state import write_current_session
-    write_current_session(input_data.get('session_id') or generate_session_id())
+    with HookTimer("SessionStart/session_state"):
+        from core.memory_reader import generate_session_id
+        from core.session_state import write_current_session
+        write_current_session(input_data.get('session_id') or generate_session_id())
 
-    version_display = get_version_display()
+    with HookTimer("SessionStart/configuration"):
+        from core.calibration import load_calibration
+        from core.version import get_version_display
+        version_display = get_version_display()
+        calibration = load_calibration()
     welcome_parts = [
         f"[CODING_SESSION_START] Obi Wag {version_display} is installed. "
         f"Run /obi to start the orchestrator workflow."
     ]
 
+    # Grounding is NOT done here. This hook has no prompt to match against, so
+    # the old attempt scored an empty string and injected nothing for as long as
+    # it existed. It lives in user_prompt_submit.py, on the event that actually
+    # carries `prompt` (issue #202). Both stay empty so detectors downstream see
+    # honest values rather than a guess.
     task_text = ''
     task_type = ''
-    if is_safety_enabled('auto_inject_sources'):
-        task_text = input_data.get('prompt') or input_data.get('message', '')
-        if task_text:
-            task_type = detect_task_type(task_text)
-            injection = get_injection_text(task_text)
 
-            if injection:
-                welcome_parts.append(f"\n[Obi Memory] Detected task type: {task_type}")
-                welcome_parts.append(f"\n[Grounding Sources Injected]\n{injection}")
-
-            # correction_retriever: migrated to detector registry (OPT-15).
-            # Runs via run_session_start_detectors() below.
-
-    calibration = load_calibration()
     default_budget = calibration.get('verification', {}).get('default_budget', 1)
     welcome_parts.append(
         f"\n[Calibration] Verification budget: {default_budget} (adjust with /obi-memory-review)"
@@ -308,48 +278,59 @@ def _handle(input_data, timer):
 
     # Daily maintenance — throttled to once per 24h so session-open latency
     # does not pay for drift hashing + GC sweeps every start (OPT-06 #179).
-    # Synchronous work above (welcome, grounding, calibration) always runs;
+    # Synchronous work above (welcome, version, calibration) always runs;
     # OBI_FORCE_MAINTENANCE=1 bypasses the throttle.
     # Drift warnings can therefore appear at most one session late.
     is_maintenance_due = _maintenance_due()
 
-    # Registry-driven detectors (OPT-15: correction_retriever,
-    # drift_detector_session, drift_nag baseline save).
+    # Registry-driven detectors (OPT-15: drift_detector_session + drift_nag
+    # baseline save). correction_retriever was removed in 0.69.69 — see
+    # detector_registry._build_session_start_detectors.
     from core.detector_registry import DetectorContext, run_session_start_detectors
 
     det_ctx = DetectorContext(
         hook_point='session_start',
         cwd=os.getcwd(),
         start_time=time.time(),
+        deadline_monotonic=deadline_monotonic,
         calibration=calibration,
         task_type=task_type,
         task_text=task_text,
         maintenance_due=is_maintenance_due,
     )
-    det_result = run_session_start_detectors(det_ctx)
+    with HookTimer("SessionStart/detectors"):
+        det_result = run_session_start_detectors(det_ctx)
     if det_result:
         welcome_parts.append(det_result)
 
-    if is_maintenance_due:
+    maintenance_completed = False
+    if is_maintenance_due and time.monotonic() < (deadline_monotonic - 0.35):
         # drift_detector + drift_nag baseline: migrated to detector registry
         # (OPT-15). Runs via run_session_start_detectors() above.
 
-        _cleanup_local_settings_regrowth(welcome_parts)
-        _gc_maintenance(welcome_parts)
-        _check_memory_md_size(welcome_parts)
-        _record_maintenance_run()
+        with HookTimer("SessionStart/maintenance"):
+            _gc_maintenance(welcome_parts, deadline_monotonic)
+            _check_memory_md_size(welcome_parts, deadline_monotonic)
+            maintenance_completed = (
+                time.monotonic() < deadline_monotonic
+                and not (det_result and 'Daily check deferred' in det_result)
+            )
+            if maintenance_completed:
+                _record_maintenance_run()
 
     # List projects in working directory (cached — see Issue #133).
-    try:
-        working_dir = _resolve_project_working_dir()
-        if working_dir:
-            subdirs = _scan_projects_cached(working_dir)
-            if subdirs:
-                welcome_parts.append("\n\n📁 Projects in working directory:")
-                for subdir in subdirs:
-                    welcome_parts.append(f"   • {subdir}")
-    except Exception as exc:
-        log_swallowed("project_listing", exc)
+    if time.monotonic() < (deadline_monotonic - 0.25):
+        try:
+            with HookTimer("SessionStart/project_listing"):
+                working_dir = _resolve_project_working_dir()
+                if working_dir:
+                    subdirs = _scan_projects_cached(working_dir, deadline_monotonic)
+                    if subdirs:
+                        welcome_parts.append("\n\n📁 Projects in working directory:")
+                        for subdir in subdirs:
+                            welcome_parts.append(f"   • {subdir}")
+        except Exception as exc:
+            log_swallowed("project_listing", exc)
 
     timer.set_output_summary("context injected successfully")
     return {
@@ -361,6 +342,8 @@ def _handle(input_data, timer):
 
 
 def main():
+    hook_started_monotonic = time.monotonic()
+    deadline_monotonic = hook_started_monotonic + SESSION_START_SOFT_BUDGET_SECONDS
     from core.worker_guard import exit_if_worker
     exit_if_worker()  # OPT-23: no-op inside a headless worker subprocess
     from core.hook_runtime import run_hook
@@ -373,7 +356,10 @@ def main():
             ),
         }
     }
-    run_hook("SessionStart", _handle, error_name="session_start", fallback=fallback)
+    def bounded_handle(input_data, timer):
+        return _handle(input_data, timer, deadline_monotonic=deadline_monotonic)
+
+    run_hook("SessionStart", bounded_handle, error_name="session_start", fallback=fallback)
 
 
 if __name__ == '__main__':

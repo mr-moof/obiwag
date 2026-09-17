@@ -1,14 +1,14 @@
 """OBI_WORKER hook-isolation guard (OPT-23 foundation).
 
-When Obi dispatches a phase as a backgrounded headless ``claude -p`` worker, the worker's
-hooks fire in its own process. Without isolation they write to the SAME run-scoped state as
+When Obi dispatches a phase as a supervised headless ``claude -p`` worker, the worker's hooks
+fire in its own process. Without isolation the state-mutating hooks write to the SAME run-scoped state as
 the parent orchestrator — heartbeats (``.obi/state/heartbeat-<run_id>.json``), pending
 learnings, session summaries — and collide.
 
 ``claude --bare`` skips hooks entirely, but on this workstation ``--bare`` also disables OAuth
 (it forces ANTHROPIC_API_KEY / apiKeyHelper auth), so workers must run WITHOUT ``--bare`` and
 self-suppress instead. The orchestrator sets ``OBI_WORKER=1`` in the worker's environment; the
-five state-touching hooks call :func:`exit_if_worker` at the top of ``main()`` and no-op.
+state-touching hooks call :func:`exit_if_worker` at the top of ``main()`` and no-op.
 
 NOT applied to ``pre_tool_use``: its policy gating must still apply to a worker's tool calls.
 """

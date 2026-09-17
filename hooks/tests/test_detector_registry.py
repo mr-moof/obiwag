@@ -22,7 +22,6 @@ from core.detector_registry import (  # noqa: E402
 )
 from core.detectors.capability_claim_detector import CapabilityClaimDetector  # noqa: E402
 from core.detectors.learning_detector_stop import LearningDetector  # noqa: E402
-from core.detectors.correction_retriever_detector import CorrectionRetrieverDetector  # noqa: E402
 from core.detectors.dirty_session_detector import DirtySessionDetector  # noqa: E402
 from core.detectors.drift_detector_session_start import DriftDetectorSessionStart  # noqa: E402
 from core.detectors.drift_detector_stop import DriftDetectorStop  # noqa: E402
@@ -105,9 +104,6 @@ class TestDetectorProtocol:
 
     def test_learning_detector_is_protocol_instance(self):
         assert isinstance(LearningDetector(), Detector)
-
-    def test_correction_retriever_detector_is_protocol_instance(self):
-        assert isinstance(CorrectionRetrieverDetector(), Detector)
 
     def test_stub_detector_is_protocol_instance(self):
         assert isinstance(StubDetector(), Detector)
@@ -282,7 +278,7 @@ class TestRunDetectors:
             MockTimer.return_value.__exit__ = MagicMock(return_value=False)
             run_detectors([d], ctx)
 
-        MockTimer.assert_called_once_with("Session_Start/test_det")
+        MockTimer.assert_called_once_with("SessionStart/test_det")
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +314,7 @@ class TestDirtySessionDetector:
              patch("core.dirty_session.format_dirty_session_nag", return_value="[Git] 1 file(s)") as mock_fmt:
             result = DirtySessionDetector().run(ctx)
 
-        mock_list.assert_called_once_with('/my/repo')
+        mock_list.assert_called_once_with('/my/repo', timeout_seconds=2.5)
         mock_fmt.assert_called_once_with(files)
         assert result == "\n[Git] 1 file(s)"
 
@@ -336,8 +332,9 @@ class TestDirtySessionDetector:
         """Verify the detector passes ctx.cwd to get_dirty_file_list."""
         captured = {}
 
-        def fake_get_dirty(path):
+        def fake_get_dirty(path, **kwargs):
             captured['cwd'] = path
+            captured['timeout_seconds'] = kwargs['timeout_seconds']
             return []
 
         ctx = DetectorContext(
@@ -348,6 +345,7 @@ class TestDirtySessionDetector:
         with patch("core.dirty_session.get_dirty_file_list", side_effect=fake_get_dirty):
             DirtySessionDetector().run(ctx)
         assert captured['cwd'] == str(tmp_path)
+        assert 0.1 <= captured['timeout_seconds'] <= 2.5
 
 
 # ---------------------------------------------------------------------------
@@ -613,11 +611,12 @@ class TestLearningDetector:
 # ---------------------------------------------------------------------------
 
 class TestRunStopDetectors:
-    def test_build_stop_detectors_returns_all_eight(self):
+    def test_build_stop_detectors_returns_all_nine(self):
         detectors = _build_stop_detectors()
-        assert len(detectors) == 8
+        assert len(detectors) == 9
         names = [d.name for d in detectors]
         assert names == [
+            'peer_review_ownership',
             'learning',
             'strike_counter',
             'dirty_session',
@@ -659,7 +658,8 @@ class TestRunStopDetectors:
         with patch("core.drift_detector.detect_drift",
                    return_value={'total_drifted': 0}), \
              patch("core.drift_nag.compute_drift_delta",
-                   return_value=(0, 0)):
+                   return_value=(0, 0)), \
+             patch("core.peer_review_guard.active_peer_reviews", return_value=[]):
             result = run_stop_detectors(ctx)
         assert result is None
 
@@ -669,35 +669,17 @@ class TestRunStopDetectors:
 # ---------------------------------------------------------------------------
 
 class TestRunSessionStartDetectors:
-    def test_build_session_start_detectors_returns_two(self):
+    def test_build_session_start_detectors_returns_only_drift(self):
+        """correction_retriever was removed in 0.69.69.
+
+        It keyed off ctx.task_text, which SessionStart never carries, so it had
+        never run. See _build_session_start_detectors' docstring for why wiring it
+        to UserPromptSubmit would have been worse than deleting it.
+        """
         detectors = _build_session_start_detectors()
-        assert len(detectors) == 2
-        names = [d.name for d in detectors]
-        assert names == [
-            'correction_retriever',
-            'drift_detector_session',
-        ]
+        assert [d.name for d in detectors] == ['drift_detector_session']
         for d in detectors:
             assert isinstance(d, Detector)
-
-    def test_run_session_start_detectors_invokes_correction_retriever(self):
-        ctx = DetectorContext(
-            hook_point='session_start',
-            cwd='/repo',
-            start_time=time.time(),
-            calibration={'safety': {'auto_inject_sources': True}},
-            task_type='review',
-            task_text='fix the bug',
-        )
-        with patch("core.correction_retriever.get_correction_injection",
-                   return_value="## Relevant Past Corrections") as mock_inj, \
-             patch("core.hook_logger.HookTimer") as MockTimer:
-            MockTimer.return_value.__enter__ = MagicMock(return_value=MockTimer.return_value)
-            MockTimer.return_value.__exit__ = MagicMock(return_value=False)
-            result = run_session_start_detectors(ctx)
-        mock_inj.assert_called_once_with('review', 'fix the bug')
-        assert result is not None
-        assert "Relevant Past Corrections" in result
 
     def test_run_session_start_detectors_all_quiet_returns_none(self):
         """When no task text + no maintenance due, nothing fires."""
@@ -714,6 +696,19 @@ class TestRunSessionStartDetectors:
             MockTimer.return_value.__exit__ = MagicMock(return_value=False)
             result = run_session_start_detectors(ctx)
         assert result is None
+
+
+def test_absolute_deadline_prevents_slow_detector_admission():
+    detector = StubDetector(name='drift_detector_stop', result='must-not-run')
+    ctx = DetectorContext(
+        hook_point='stop',
+        cwd='/repo',
+        start_time=time.time(),
+        deadline_monotonic=time.monotonic() + 0.1,
+    )
+    result = run_detectors([detector], ctx)
+    assert detector.run_called is False
+    assert '[Skipped: drift_detector_stop]' in result
 
 
 if __name__ == "__main__":

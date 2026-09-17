@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 
 import yaml
 
+from .git_branches import get_remote_default_branch
 # Re-exported from paths.py for backward compatibility with older callers.
 from .paths import get_obi_root, get_obi_source_repo  # noqa: F401
 
@@ -153,9 +154,10 @@ def check_for_updates() -> Tuple[bool, str, List[str]]:
         return False, "Source repository not found at ~/source/obiwag-agents", []
 
     try:
+        default_branch = get_remote_default_branch(source_repo)
         # Fetch from origin
         result = subprocess.run(
-            ['git', 'fetch', 'origin', 'master'],
+            ['git', 'fetch', 'origin', default_branch],
             cwd=str(source_repo),
             capture_output=True,
             text=True,
@@ -166,7 +168,7 @@ def check_for_updates() -> Tuple[bool, str, List[str]]:
 
         # Check if there are new commits
         result = subprocess.run(
-            ['git', 'rev-list', '--count', 'HEAD..origin/master'],
+            ['git', 'rev-list', '--count', f'HEAD..origin/{default_branch}'],
             cwd=str(source_repo),
             capture_output=True,
             text=True,
@@ -181,7 +183,7 @@ def check_for_updates() -> Tuple[bool, str, List[str]]:
 
         # Get commit summaries
         result = subprocess.run(
-            ['git', 'log', '--oneline', 'HEAD..origin/master'],
+            ['git', 'log', '--oneline', f'HEAD..origin/{default_branch}'],
             cwd=str(source_repo),
             capture_output=True,
             text=True,
@@ -217,9 +219,10 @@ def apply_updates() -> Tuple[bool, str]:
         return False, "Source repository not found at ~/source/obiwag-agents"
 
     try:
+        default_branch = get_remote_default_branch(source_repo)
         # Stage 1: Pull updates in source repo
         result = subprocess.run(
-            ['git', 'pull', 'origin', 'master'],
+            ['git', 'pull', 'origin', default_branch],
             cwd=str(source_repo),
             capture_output=True,
             text=True,

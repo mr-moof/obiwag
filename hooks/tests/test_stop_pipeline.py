@@ -88,15 +88,15 @@ class TestResolveTaskType:
 
     def test_uses_session_state_when_available(self):
         state = MagicMock()
-        state.get.return_value = 'cloud'
-        assert sp.resolve_task_type({}, state) == 'cloud'
+        state.get.return_value = 'widgetapi'
+        assert sp.resolve_task_type({}, state) == 'widgetapi'
 
     def test_state_unknown_falls_back_to_prompt_detection(self):
         state = MagicMock()
         state.get.return_value = 'unknown'
-        with patch("core.pattern_matcher.detect_task_type", return_value='virtualization'):
-            result = sp.resolve_task_type({"prompt": "virtualization stuff"}, state)
-        assert result == 'virtualization'
+        with patch("core.pattern_matcher.detect_task_type", return_value='canvasapi'):
+            result = sp.resolve_task_type({"prompt": "canvasapi stuff"}, state)
+        assert result == 'canvasapi'
 
     def test_state_none_uses_prompt_message_field(self):
         with patch("core.pattern_matcher.detect_task_type", return_value='debugging'):

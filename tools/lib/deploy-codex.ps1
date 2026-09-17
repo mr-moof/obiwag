@@ -11,13 +11,13 @@
     (Copy-SingleFile, Copy-DirectoryContents, Add-DeployFailure).
 
     Provides:
-      - Invoke-CodexDeploy : deploy AGENTS.md, project hooks.json, runtime hooks,
-        skills, and shared tooling for Codex; set OBI_HOME / OBIWAG_SOURCE; write
-        the Codex deployment manifest; run validate-codex.py.
+      - Invoke-CodexDeploy : deploy AGENTS.md, the Obi profile, project hooks.json,
+        runtime hooks, skills, and shared tooling for Codex; set OBI_HOME /
+        OBIWAG_SOURCE; write the Codex deployment manifest; run validate-codex.py.
 #>
 
 # Deploy all Codex configuration. Reads $PlatformsDir, $RepoRoot, $HooksDir,
-# $SkillsDir, $ScriptDir, $ToolsTarget, $CodexTarget from the deploy.ps1 caller
+# $SkillsDir, $ScriptDir, $PhasesDir, $ToolsTarget, $CodexTarget from the deploy.ps1 caller
 # scope. The Codex manifest is function-local ($codexManifest).
 function Invoke-CodexDeploy {
     param(
@@ -60,6 +60,13 @@ function Invoke-CodexDeploy {
         Copy-SingleFile -Source $codexAgentsSource -Destination $codexAgentsTarget -DryRun:$DryRun | Out-Null
         Add-CodexManifestEntry 'AGENTS.md' 'platforms/codex/AGENTS.md'
 
+        # Optional user-selected profile: routine Obi work uses Terra/medium. Discovery and Author
+        # explicitly override their bounded native phase agents in AGENTS.md.
+        $codexProfileSource = Join-Path $codexSource 'obi.config.toml'
+        $codexProfileTarget = Join-Path $CodexTarget 'obi.config.toml'
+        Copy-SingleFile -Source $codexProfileSource -Destination $codexProfileTarget -DryRun:$DryRun | Out-Null
+        Add-CodexManifestEntry 'obi.config.toml' 'platforms/codex/obi.config.toml'
+
         # Project-scoped Codex hooks.
         $codexHooksSource = Join-Path $codexSource 'hooks.json'
         $codexHooksTarget = Join-Path $codexProjectDir 'hooks.json'
@@ -82,12 +89,22 @@ function Invoke-CodexDeploy {
             Write-Info "Deployed Codex skills -> $codexSkillsTarget"
         }
 
-        # Keep shared PowerShell tooling in the CB-trusted OBI_HOME tree.
+        # Keep shared PowerShell tooling in the user-local OBI_HOME tree.
         if (Test-Path $ScriptDir) {
             $toolsDeployDest = Join-Path $ToolsTarget 'tools'
             Copy-DirectoryContents -Source $ScriptDir -Destination $toolsDeployDest -DryRun:$DryRun
             Add-CodexManifestBulk $ScriptDir 'tools' $toolsDeployDest
             Write-Info "Deployed tools/ -> $toolsDeployDest"
+        }
+
+        # Codex-only deployment must carry the same runtime phase policy as a combined deploy.
+        # dispatch-worker.ps1 and native_phase_state.py resolve this trusted OBI_HOME sibling.
+        $phaseTableSource = Join-Path $PhasesDir 'phase-table.json'
+        $phaseTableDest = Join-Path $ToolsTarget 'phases\phase-table.json'
+        $phaseTableCopied = Copy-SingleFile -Source $phaseTableSource -Destination $phaseTableDest `
+            -DryRun:$DryRun
+        if ($phaseTableCopied) {
+            Write-Info "Deployed phase-table.json -> $phaseTableDest"
         }
 
         if (-not $DryRun) {

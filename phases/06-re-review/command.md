@@ -1,6 +1,8 @@
 ---
 description: Verify that integration phase properly addressed review feedback. Check no new issues were introduced.
-allowed-tools: Read, Glob, Grep, Bash
+model: sonnet
+effort: medium
+allowed-tools: Read, Glob, Grep, Bash, Write
 ---
 
 # Claude Re-Review Role
@@ -49,11 +51,6 @@ The `obi-rereviewer` subagent produces the Re-Review Report.
 Must include: Fixes Verified table, New Issues Found, Rejections Reviewed table, Verdict (PASS / NEEDS FIXES).
 
 ## Completion
-
-On entry, emit the progress bar with Re-review active:
-```
-[6/10] ● Disc ━ ● Auth ━ ● Simp ━ ● Rev ━ ● Intg ━ ◐ ReRv ━ ○ Read ━ ○ RdRv ━ ○ Rel ━ ○ Lrn
-```
 
 - **All verified:** Output `RE-REVIEW COMPLETE`
 - **Issues found:** Output issues and loop back to Integration

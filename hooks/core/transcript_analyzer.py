@@ -163,7 +163,25 @@ def detect_corrections_in_human_turns(turns: list) -> list:
         (r'^wait,?\s+(that\'?s|it\'?s|this\s+is)\s+(not|wrong)', 0.8, None),
 
         # Redirection patterns (medium confidence)
-        (r'instead[,]?\s+(use|try|do|of)', 0.7, None),
+        #
+        # The signal is "instead" NOT followed by "of". English puts the
+        # redirection on either side of the verb -- "instead, use X" and "use X
+        # instead" are both corrections -- while "X instead of Y" is an ordinary
+        # comparison and is not.
+        #
+        # The separator matters because \b fires on ANY non-word char, so a bare
+        # \s+ lookahead let every non-space spelling of "instead of" through:
+        # "instead-of", "docs/instead/of/this", an em-dashed form.
+        #
+        # It must match "instead of" as a UNIT -- whitespace, or ONE punctuation
+        # char with no space around it. A permissive [\s\-/]+ class also swallowed
+        # "Instead - of course, use the wrapper", which is a genuine correction
+        # interrupted by a dash, not a comparison.
+        #
+        # The trailing lookahead drops the possessive "instead's", which \b also
+        # splits. Escapes keep this line ASCII.
+        (r'\binstead\b(?!(?:\s+|[-/\u2013\u2014])of\b)(?![\'\u2019]s\b)',
+         0.7, None),
         (r'should\s+be\s+[\'"`]', 0.7, 'api_shape'),  # Often parameter corrections
         (r'not\s+[\'"`][^\'"`]+[\'"`][,.]?\s+(use|it\'?s|should)', 0.7, 'api_shape'),
 
@@ -328,6 +346,7 @@ def analyze_transcript(transcript_text: str) -> dict:
     source_patterns = [
         r'docs/[\w\-/]+\.md',
         r'https?://[\w\.\-/]+',
+        r'galaxy\.[\w\.]+/[\w\-/]+',
     ]
     for pattern in source_patterns:
         matches = re.findall(pattern, transcript_text)

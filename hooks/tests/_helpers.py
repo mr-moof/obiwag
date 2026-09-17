@@ -6,6 +6,7 @@ need dependency injection should live in ``conftest.py`` instead.
 """
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -23,7 +24,8 @@ class StubSessionState:
     that the hook entry points exercise:
 
     - ``get(key, default)`` — dict-style read
-    - ``set(key, value)`` — dict-style write
+    - ``set(key, value)`` — dict-style write, returns True like the real one
+    - ``transaction()``    — yields the mutable dict (synthetic fixtures)
     - ``snapshot()``       — copy of the current state
 
     Extracted from duplicate definitions in test_compact_nag.py and
@@ -38,6 +40,12 @@ class StubSessionState:
 
     def set(self, key, value):
         self._data[key] = value
+        return True
+
+    @contextmanager
+    def transaction(self):
+        """Mirror the real transaction: yield the live dict, persist on exit."""
+        yield self._data
 
     def snapshot(self) -> dict:
         return dict(self._data)

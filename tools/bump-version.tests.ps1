@@ -5,10 +5,10 @@
 .DESCRIPTION
     Tests version format validation, YAML parsing, regex replacement patterns,
     date formatting, and no-op behavior. Uses isolated temp files.
-    Compatible with Pester 3.4.0+.
+    Requires Pester 5.
 
 .EXAMPLE
-    Invoke-Pester C:\Users\user\source\obiwag-agents\tools\bump-version.tests.ps1
+    .\tools\run-tests.ps1 -Path tools\bump-version.tests.ps1
 #>
 
 Describe 'Bump Version Script' {
@@ -74,27 +74,27 @@ Existing release prose.
     Context 'Version Format Validation' {
 
         It 'Accepts two-segment version (0.57)' {
-            ('0.57' -match '^\d+\.\d+(\.\d+)?$') | Should Be $true
+            ('0.57' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $true
         }
 
         It 'Accepts three-segment version (1.0.0)' {
-            ('1.0.0' -match '^\d+\.\d+(\.\d+)?$') | Should Be $true
+            ('1.0.0' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $true
         }
 
         It 'Rejects version without dot' {
-            ('057' -match '^\d+\.\d+(\.\d+)?$') | Should Be $false
+            ('057' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $false
         }
 
         It 'Rejects version with letters' {
-            ('0.57a' -match '^\d+\.\d+(\.\d+)?$') | Should Be $false
+            ('0.57a' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $false
         }
 
         It 'Rejects version with leading v' {
-            ('v0.57' -match '^\d+\.\d+(\.\d+)?$') | Should Be $false
+            ('v0.57' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $false
         }
 
         It 'Rejects empty string' {
-            ('' -match '^\d+\.\d+(\.\d+)?$') | Should Be $false
+            ('' -match '^\d+\.\d+(\.\d+)?$') | Should -Be $false
         }
     }
 
@@ -105,7 +105,7 @@ Existing release prose.
             $yamlContent -match 'version:\s*"([^"]+)"' | Out-Null
             $parsed = $Matches[1]
 
-            $parsed | Should Be $OldVersion
+            $parsed | Should -Be $OldVersion
         }
 
         It 'Handles missing version field gracefully' {
@@ -113,7 +113,7 @@ Existing release prose.
             $yamlContent = Get-Content $VersionYaml -Raw
             $matched = $yamlContent -match 'version:\s*"([^"]+)"'
 
-            $matched | Should Be $false
+            $matched | Should -Be $false
         }
 
         It 'Handles unquoted version' {
@@ -122,7 +122,7 @@ Existing release prose.
             # The script requires quoted version, so this should not match
             $matched = $yamlContent -match 'version:\s*"([^"]+)"'
 
-            $matched | Should Be $false
+            $matched | Should -Be $false
         }
     }
 
@@ -131,25 +131,25 @@ Existing release prose.
         It 'Matches version in version.yaml' {
             $content = Get-Content $VersionYaml -Raw
             $pattern = '(?<=version:\s*")' + [regex]::Escape($OldVersion) + '(?=")'
-            ($content -match $pattern) | Should Be $true
+            ($content -match $pattern) | Should -Be $true
         }
 
         It 'Matches last_updated in version.yaml' {
             $content = Get-Content $VersionYaml -Raw
             $pattern = '(?<=last_updated:\s*")[\d-]+(?=")'
-            ($content -match $pattern) | Should Be $true
+            ($content -match $pattern) | Should -Be $true
         }
 
         It 'Matches version in README.md' {
             $content = Get-Content $ReadmeMd -Raw
             $pattern = '(?<=\*\*v)' + [regex]::Escape($OldVersion) + '(?=\*\*)'
-            ($content -match $pattern) | Should Be $true
+            ($content -match $pattern) | Should -Be $true
         }
 
         It 'Matches version in hooks-architecture.md' {
             $content = Get-Content $HooksArchMd -Raw
             $pattern = '(?<=\*\*Version:\*\*\s*)' + [regex]::Escape($OldVersion)
-            ($content -match $pattern) | Should Be $true
+            ($content -match $pattern) | Should -Be $true
         }
     }
 
@@ -162,8 +162,8 @@ Existing release prose.
             Set-Content $VersionYaml $newContent -NoNewline
 
             $result = Get-Content $VersionYaml -Raw
-            $result | Should Match ([regex]::Escape('"0.57"'))
-            $result | Should Not Match ([regex]::Escape('"0.56"'))
+            $result | Should -Match ([regex]::Escape('"0.57"'))
+            $result | Should -Not -Match ([regex]::Escape('"0.56"'))
         }
 
         It 'Replaces date in version.yaml' {
@@ -173,7 +173,7 @@ Existing release prose.
             Set-Content $VersionYaml $newContent -NoNewline
 
             $result = Get-Content $VersionYaml -Raw
-            $result | Should Match $Today
+            $result | Should -Match $Today
         }
 
         It 'Replaces version in README.md' {
@@ -183,7 +183,7 @@ Existing release prose.
             Set-Content $ReadmeMd $newContent -NoNewline
 
             $result = Get-Content $ReadmeMd -Raw
-            $result | Should Match '\*\*v0\.57\*\*'
+            $result | Should -Match '\*\*v0\.57\*\*'
         }
     }
 
@@ -194,7 +194,7 @@ Existing release prose.
             $yamlContent -match 'version:\s*"([^"]+)"' | Out-Null
             $current = $Matches[1]
 
-            ($current -eq $OldVersion) | Should Be $true
+            ($current -eq $OldVersion) | Should -Be $true
         }
 
         It 'Detects when version differs' {
@@ -202,7 +202,7 @@ Existing release prose.
             $yamlContent -match 'version:\s*"([^"]+)"' | Out-Null
             $current = $Matches[1]
 
-            ($current -eq $NewVersion) | Should Be $false
+            ($current -eq $NewVersion) | Should -Be $false
         }
     }
 
@@ -221,8 +221,8 @@ Existing release prose.
                 'docs\hooks-architecture.md', # version
                 'docs\hooks-architecture.md'  # date
             )
-            $targetFiles.Count | Should Be 5
-            ($targetFiles | Sort-Object -Unique).Count | Should Be 3
+            $targetFiles.Count | Should -Be 5
+            ($targetFiles | Sort-Object -Unique).Count | Should -Be 3
         }
     }
 
@@ -230,13 +230,13 @@ Existing release prose.
 
         It 'Uses yyyy-MM-dd format' {
             $date = Get-Date -Format 'yyyy-MM-dd'
-            ($date -match '^\d{4}-\d{2}-\d{2}$') | Should Be $true
+            ($date -match '^\d{4}-\d{2}-\d{2}$') | Should -Be $true
         }
 
         It 'Matches today date' {
             $date = Get-Date -Format 'yyyy-MM-dd'
             $year = (Get-Date).Year
-            $date | Should Match "^$year-"
+            $date | Should -Match "^$year-"
         }
     }
 
@@ -268,12 +268,12 @@ Existing release prose.
                 }
             }
 
-            $success | Should Be 5
+            $success | Should -Be 5
 
             # Verify each file
-            (Get-Content $VersionYaml -Raw) | Should Match '"0.57"'
-            (Get-Content $ReadmeMd -Raw) | Should Match 'v0\.57'
-            (Get-Content $HooksArchMd -Raw) | Should Match '0\.57'
+            (Get-Content $VersionYaml -Raw) | Should -Match '"0.57"'
+            (Get-Content $ReadmeMd -Raw) | Should -Match 'v0\.57'
+            (Get-Content $HooksArchMd -Raw) | Should -Match '0\.57'
         }
     }
 
@@ -285,18 +285,23 @@ Existing release prose.
 
         # Inserts a new version section above the first existing one, preserving
         # everything above it. Returns the new changelog string.
-        function Add-ChangelogStub {
-            param($Content, $Version, $Today)
-            $stub = "## $Version ($Today)`n`nTODO: describe this release.`n"
-            if ($Content -match '(?m)^## ') {
-                $firstSection = $Content.IndexOf("`n## ")
-                if ($firstSection -ge 0) {
-                    $insertAt = $firstSection + 1
-                    return $Content.Substring(0, $insertAt) + $stub + "`n" + $Content.Substring($insertAt)
+        # Must live in BeforeAll: a function defined directly in a Context body is
+        # created during Pester 5's DISCOVERY pass and is gone by the time It bodies
+        # run.
+        BeforeAll {
+            function Add-ChangelogStub {
+                param($Content, $Version, $Today)
+                $stub = "## $Version ($Today)`n`nTODO: describe this release.`n"
+                if ($Content -match '(?m)^## ') {
+                    $firstSection = $Content.IndexOf("`n## ")
+                    if ($firstSection -ge 0) {
+                        $insertAt = $firstSection + 1
+                        return $Content.Substring(0, $insertAt) + $stub + "`n" + $Content.Substring($insertAt)
+                    }
+                    return $stub + "`n" + $Content
                 }
-                return $stub + "`n" + $Content
+                return $Content.TrimEnd() + "`n`n" + $stub
             }
-            return $Content.TrimEnd() + "`n`n" + $stub
         }
 
         It 'Prepends a new version section above the existing entries' {
@@ -305,11 +310,11 @@ Existing release prose.
             Set-Content $ChangelogMd $newContent -NoNewline
 
             $result = Get-Content $ChangelogMd -Raw
-            $result | Should Match ([regex]::Escape("## $NewVersion ($Today)"))
+            $result | Should -Match ([regex]::Escape("## $NewVersion ($Today)"))
             # The new section appears before the old one.
             $idxNew = $result.IndexOf("## $NewVersion")
             $idxOld = $result.IndexOf("## $OldVersion")
-            ($idxNew -lt $idxOld) | Should Be $true
+            ($idxNew -lt $idxOld) | Should -Be $true
         }
 
         It 'Preserves the file header above the first section' {
@@ -317,9 +322,9 @@ Existing release prose.
             $newContent = Add-ChangelogStub -Content $content -Version $NewVersion -Today $Today
 
             # The "# Changelog" header must still be the first line.
-            $newContent | Should Match '^# Changelog'
+            $newContent | Should -Match '^# Changelog'
             # The header must come before the new version section.
-            ($newContent.IndexOf('# Changelog') -lt $newContent.IndexOf("## $NewVersion")) | Should Be $true
+            ($newContent.IndexOf('# Changelog') -lt $newContent.IndexOf("## $NewVersion")) | Should -Be $true
         }
 
         It 'Preserves all prior history' {
@@ -327,8 +332,8 @@ Existing release prose.
             $newContent = Add-ChangelogStub -Content $content -Version $NewVersion -Today $Today
 
             # The old section and its prose are still present.
-            $newContent | Should Match ([regex]::Escape("## $OldVersion (2026-02-17)"))
-            $newContent | Should Match 'Existing release prose\.'
+            $newContent | Should -Match ([regex]::Escape("## $OldVersion (2026-02-17)"))
+            $newContent | Should -Match 'Existing release prose\.'
         }
 
         It 'Appends a stub when no prior version sections exist' {
@@ -336,8 +341,8 @@ Existing release prose.
             $content = Get-Content $ChangelogMd -Raw
             $newContent = Add-ChangelogStub -Content $content -Version $NewVersion -Today $Today
 
-            $newContent | Should Match ([regex]::Escape("## $NewVersion ($Today)"))
-            $newContent | Should Match '^# Changelog'
+            $newContent | Should -Match ([regex]::Escape("## $NewVersion ($Today)"))
+            $newContent | Should -Match '^# Changelog'
         }
     }
 }

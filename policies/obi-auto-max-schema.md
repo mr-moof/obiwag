@@ -1,6 +1,5 @@
 # Rigor=max Plan-File Schema Reference
 
-> **Status:** v0.69.31 contract.
 > **Audience:** plan authors, `/obi-auto` rigor=max orchestrator, `tools/parse-plan-phase0.ps1`, `tools/run-grep-gates.ps1`, and `hooks/core/auto_memory_capture.py`.
 > **Parser:** regex-based (per `tools/bump-version.ps1:55-60` pattern). No YAML library is introduced. Plans must use the simplified flat-block format documented below.
 
@@ -8,19 +7,22 @@
 
 A plan file consumed by `/obi-auto` (rigor=max) is a Markdown file with two optional structured blocks parsed by the orchestrator:
 
-1. `phase0:` — Phase 0 prereq lock-in questions (drives `AskUserQuestion`).
+1. `phase0:` — Phase 0 prereq lock-ins (reversible defaults auto-lock; material inputs drive `AskUserQuestion`).
 2. `verification.grep:` — hard grep gates that fire after specific phases.
 
 Plus two write-back blocks the orchestrator inserts during Phase 0:
 
-3. `runtime.phase0:` — locked answers + codex-on-plan status.
+3. `runtime.phase0:` — locked answers + peer-on-plan status.
 4. `runtime.probes:` — file-path references to probe outputs (raw data lives in `.obi/runtime/probes-<UTC>.jsonl`, not in the plan).
 
 A plan with neither `phase0:` nor `verification.grep:` is still valid — it just becomes a rigor=max run with chrome relabeled `Lane: max`.
 
 ## `phase0:` block
 
-Drives one `AskUserQuestion` per entry, in declared order. Format per `docs/askuserquestion-format.md`.
+Drives one lock per entry in declared order. A declared `default` is auto-selected only when it is
+reversible, conservative, in scope, and has no destructive/external-write or credential effect.
+Other entries drive one material-input `AskUserQuestion`; format per
+`docs/askuserquestion-format.md`. Never use these entries merely to authorize retry or continuation.
 
 ```yaml
 phase0:
@@ -41,10 +43,10 @@ phase0:
 | Field | Required | Type | Behavior |
 |---|---|---|---|
 | `id` | yes | string (snake_case) | Stable key for this question. Used in `runtime.phase0.answers[]`, probe routing, and surprise-detection lookups. |
-| `question` | yes | string | Verbatim prompt shown to user via `AskUserQuestion`. |
+| `question` | yes | string | Verbatim decision text recorded for auto-default or shown via `AskUserQuestion`. |
 | `placeholder` | optional | string | Token (e.g. `<target-namespace>`) replaced with answer in the plan body via `Edit` tool. Skip if no body replacement needed. |
 | `options` | optional | list of strings | Becomes `AskUserQuestion` option labels. If absent + `free_text: true`, becomes a single "Other (specify)" slot. |
-| `default` | optional | string | Recommended option (rendered as "(Recommended)" in `AskUserQuestion` per `docs/askuserquestion-format.md`). |
+| `default` | optional | string | Auto-locked when it meets the reversible/conservative boundary; otherwise rendered as "(Recommended)" in `AskUserQuestion`. |
 | `locks_field` | optional | string | `<file>:<jsonpath>` — annotation for downstream probes/integrations to know what config field this answer locks. Read by probes; not enforced by the parser. |
 | `free_text` | optional | boolean | `true` adds a free-text "Other" option. Mutually compatible with `options`. |
 
@@ -64,7 +66,10 @@ Other ids are accepted but won't trigger any probe.
 
 ## `verification.grep:` block
 
-Hard grep gates fire only when their `after_phase` matches the just-completed phase (1-10).
+Hard grep gates fire only when their `after_phase` matches the just-completed phase (1-10). The
+block is parsed as YAML from the plan body; a prose or Markdown-heading description of the same
+rule is not recognized (`run-grep-gates.ps1` reports "nothing to check" and passes), so copy the
+shape below verbatim.
 
 ```yaml
 verification:
@@ -113,36 +118,38 @@ Appended to the plan file at end-of-Phase-0 by the orchestrator. Required becaus
 runtime:
   phase0:
     locked_at: "2026-05-02T17:32:00Z"
-    plan_file: "C:/Users/user/.claude/plans/my-plan.md"
+    plan_file: "C:/src/obiwag-agents/.obi/reports/20260901T221915Z-plan.md"
     answers:
       - id: target_namespace
         question: "Where does the fork land?"
         answer: "user"
         locks_field: "bootstrap-config.json:repoBase"
-        source: "AskUserQuestion"
+        source: "auto-default"
       - id: runner_tags
         question: "Which runner tags do CI jobs need?"
-        answer: "win-container-bld"
+        answer: "default-build"
         locks_field: ""
         source: "AskUserQuestion"
-    codex:
+    peer:
       status: "ran"  # or "unavailable" or "pending"
+      provider: "codex"  # or "claude" or ""
       reason: ""
       checked_at: "2026-05-02T17:33:14Z"
 ```
 
-The `codex:` sub-block is **required** in every locked plan. It is initialized with `status: "pending"` during the answers write-back (Phase 0 step 5) and overwritten in step 7 with the real outcome. Three valid statuses:
+The `peer:` sub-block is **required** in every locked plan. It is initialized with `status: "pending"` during the answers write-back (Phase 0 step 5) and overwritten in step 7 with the real outcome. Three valid statuses:
 
-- `pending` — write-back complete but Codex has not yet been invoked. Transient; should never persist past a successful Phase 0 run.
-- `ran` — Codex executed; transcript was the audit. `reason: ""`.
-- `unavailable` — Codex failed (not on PATH, exec failed, etc.). `reason` carries a one-line cause, `checked_at` is set.
+- `pending` — write-back complete but the peer harness has not yet been invoked. Transient; should never persist past a successful Phase 0 run.
+- `ran` — the peer harness reached `transport_status: completed`; `provider` records the selected peer. Validation and verdict remain separate in the harness result.
+- `unavailable` — the harness reached any other terminal transport state, or validation yielded no usable result. `reason` carries a one-line cause, `provider` is set when known, and `checked_at` is set.
 
-The orchestrator MUST overwrite `codex` after step 7 regardless of outcome. The schema parser does not enforce this; the contract is enforced by `orchestration/obi-auto-max.md`.
+The orchestrator MUST overwrite `peer` after step 7 regardless of outcome. The schema parser does not enforce this; the contract is enforced by `docs/policies/rigor-max-gates.md` (its "Phase 0 — Prereq Lock-In" section). `orchestration/obi-auto-max.md` is only a thin wrapper that re-invokes `obi-auto.md` with `rigor: max`, and `obi-auto.md` in turn points at the gates file.
 
 ### Reading rules
 
 - Surprise detection: read expected values from `runtime.phase0.answers[]`, not from the original `phase0:` schema.
-- `source` is `AskUserQuestion` for v0.69.31. Reserved for future cron / answers-file modes.
+- `source` is `auto-default` for a reversible declared default or `AskUserQuestion` for a material
+  input. Downstream consumers must accept both and must not re-derive the answer from `default:`.
 
 ## Write-back: `runtime.probes:`
 
@@ -172,16 +179,16 @@ Standard /obi-auto run with Lane: max chrome.
 ### Phase-0-only plan
 
 ```markdown
-# Fork driver-hype
+# Fork sample-project
 
-Goal: fork driver-hype to <target-namespace>, strip user-specific code, push.
+Goal: fork sample-project to <target-namespace>, strip user-specific code, push.
 
 phase0:
   - id: target_namespace
     question: "Which namespace owns the fork?"
     placeholder: "<target-namespace>"
-    options: [personal, organization, public]
-    default: personal
+    options: [user-personal, project-team, instance-public]
+    default: project-team
 ```
 
 ### Plan with grep gates
@@ -208,4 +215,4 @@ verification:
 - `tools/parse-plan-phase0.ps1` — emits ordered JSON for the orchestrator.
 - `tools/run-grep-gates.ps1` — fires gates and writes `.obi/runtime/grep-gate-*.json`.
 - `tools/probes/_lib.ps1` — probe runtime + JSON schema emitter.
-- `orchestration/obi-auto.md` — rigor=max Phase 0 protocol uses this schema.
+- `policies/rigor-max-gates.md` — rigor=max Phase 0 protocol uses this schema.

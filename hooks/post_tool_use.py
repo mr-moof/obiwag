@@ -14,7 +14,9 @@ NOTE: Correction detection has been moved to the Stop hook because:
 
 import fnmatch
 import os
+import re
 import sys
+import time
 from datetime import datetime, timezone
 
 # Add hook root to path for imports
@@ -29,10 +31,22 @@ if HOOK_ROOT not in sys.path:
 # process, but multiple calls within the same process hit the cache.
 _RUN_ID = None
 _RUN_ID_LOADED = False
+_MAX_TRACKED_TOOL_EVENTS = 1000
+# Heartbeat is a staleness signal for the watchdog, not an event log: one write
+# per PostToolUse call is wasted I/O. Tests set this to 0 to exercise a write.
+_HEARTBEAT_MIN_INTERVAL_SEC = 15.0
+_EPHEMERAL_SIZE_SUFFIXES = (
+    '.diff', '.jsonl', '.log', '.out', '.patch', '.tmp',
+)
 
 
 def _touch_heartbeat(tool_name: str) -> None:
     """Write a heartbeat JSON file for the watchdog to poll.
+
+    Throttled to at most one write per ``_HEARTBEAT_MIN_INTERVAL_SEC`` by
+    comparing the existing file's mtime: PostToolUse fires on every tool call,
+    and the watchdog only needs staleness at minute granularity, so a write per
+    call is pure I/O cost on the hook's 3 s budget.
 
     Best-effort: any OSError is swallowed so the heartbeat never blocks
     tool use.  No-op when no autonomous run is active (run-id.txt absent).
@@ -48,9 +62,15 @@ def _touch_heartbeat(tool_name: str) -> None:
             _RUN_ID = None
     if not _RUN_ID:
         return
+    hb_path = os.path.join('.obi', 'state', f'heartbeat-{_RUN_ID}.json')
+    try:
+        age = time.time() - os.path.getmtime(hb_path)
+        if 0 <= age < _HEARTBEAT_MIN_INTERVAL_SEC:
+            return
+    except OSError:
+        pass  # no previous heartbeat (or unreadable) — write one
     try:
         import json as _json
-        hb_path = os.path.join('.obi', 'state', f'heartbeat-{_RUN_ID}.json')
         with open(hb_path, 'w') as f:
             _json.dump({"ts": datetime.now(timezone.utc).isoformat(), "tool": tool_name}, f)
     except OSError:
@@ -73,6 +93,23 @@ def _path_matches_any_glob(path, patterns):
         if fnmatch.fnmatch(norm, pat_norm):
             return True
     return False
+
+
+def _is_ephemeral_quality_artifact(path: str) -> bool:
+    """Exclude generated review/log output from source-module size policy."""
+    norm = path.replace('\\', '/').lower()
+    return (
+        norm.endswith(_EPHEMERAL_SIZE_SUFFIXES)
+        or '/.obi/review/runs/' in norm
+        or '/.obi/state/worker-' in norm
+    )
+
+
+def _append_tool_event(tools_used, event):
+    """Return a bounded rolling tool history for advisory quality signals."""
+    history = list(tools_used) if isinstance(tools_used, list) else []
+    history.append(event)
+    return history[-_MAX_TRACKED_TOOL_EVENTS:]
 
 
 def compute_in_session_alerts(tools_used, tool_name, tool_path):
@@ -123,20 +160,26 @@ def compute_in_session_alerts(tools_used, tool_name, tool_path):
         red = int(thresholds.get('file_size_red', 600))
         ignore_globs = thresholds.get('ignore_globs', []) or []
 
-        if not _path_matches_any_glob(tool_path, ignore_globs):
-            line_count = check_file_size(tool_path, threshold=yellow)
+        if (
+            not _is_ephemeral_quality_artifact(tool_path)
+            and not _path_matches_any_glob(tool_path, ignore_globs)
+        ):
+            line_count = check_file_size(
+                tool_path,
+                threshold=yellow,
+                max_lines=red,
+            )
             if line_count:
                 if line_count > red:
                     alerts.append(
-                        f"[Quality RED] {tool_path} is {line_count} lines "
-                        f"(hard limit: {red}). Non-Negotiable Rule #3 "
-                        "requires splitting this file."
+                        f"[Quality RED] {tool_path} is over the {red}-line ceiling. "
+                        "If you are changing this file, split it as part of the change; "
+                        "if you are only reading it, no action."
                     )
                 else:
                     alerts.append(
-                        f"[Quality] {tool_path} is {line_count} lines "
-                        f"(threshold: {yellow}). Consider splitting into "
-                        "smaller modules (Non-Negotiable Rule #3)."
+                        f"[Quality] {tool_path} exceeds the {yellow}-line threshold; "
+                        "consider splitting into smaller modules if you are changing it."
                     )
 
     return alerts
@@ -164,8 +207,8 @@ def check_compact_nag(session_state) -> list:
         return []
 
     return [
-        f"[Context] {delta} tool calls since last compact. "
-        "Run /compact before continuing."
+        f"[Context] {delta} tool calls since the last compact. "
+        "Compact (/compact) at the next phase boundary if earlier tool output is no longer needed."
     ]
 
 
@@ -176,9 +219,49 @@ def _handle(input_data, timer):
     # autonomous run, regardless of whether logging is disabled.
     _touch_heartbeat(tool_name)
 
+    # issue #200 §3: record the exact tool-result DROP sentinel as a pending,
+    # unresolved record so the Stop hook can fail loud if it is never recovered.
+    # Best-effort and unconditional (a safety mechanism, not logging). Only
+    # `tool_response`/`tool_error` is inspected — never `tool_input` — so a
+    # sentinel appearing in a command does not create a record. The transcript
+    # scan in stop.py is the authoritative gate.
+    try:
+        from core import drop_guard
+        _sid = input_data.get('session_id')
+        if _sid:
+            _resp = input_data.get('tool_response', input_data.get('tool_error'))
+            if drop_guard.is_drop_response(_resp):
+                drop_guard.record_drop(_sid, tool_name)
+    except Exception as exc:
+        from core.hook_logger import log_swallowed
+        log_swallowed('post_tool_drop_guard', exc)
+
+    # Transient git/gh auth failure: nudge an IMMEDIATE retry rather than a
+    # credential diagnosis / hand-off (the user's recurring friction). Always-on and
+    # independent of the log_corrections toggle — a behavioral safety net, not
+    # logging — so it sits above the is_safety_enabled gate, like drop recording.
+    if tool_name in ('Bash', 'PowerShell'):
+        try:
+            from core.git_transient import transient_retry_alert, coerce_output
+            _cmd = (input_data.get('tool_input') or {}).get('command', '') or ''
+            # Avoid flattening a potentially huge tool response unless this is
+            # actually a git/gh shell operation eligible for the alert.
+            if re.search(r'\b(?:git|gh)\b', _cmd):
+                _out = coerce_output(input_data.get('tool_response', input_data.get('tool_error')))
+                _alert = transient_retry_alert(tool_name, _cmd, _out)
+                if _alert:
+                    timer.set_output_summary("transient-retry alert")
+                    return {"systemMessage": _alert}
+        except Exception as exc:
+            from core.hook_logger import log_swallowed
+            log_swallowed('post_tool_git_transient', exc)
+
     from core.calibration import is_safety_enabled
-    from core.memory_reader import generate_session_id
-    from core.session_state import get_session_state, read_current_session
+    from core.session_state import (
+        StateUnavailable,
+        get_session_state,
+        resolve_session_id,
+    )
 
     timer.set_input_summary(f"tool={tool_name}")
 
@@ -192,35 +275,44 @@ def _handle(input_data, timer):
         timer.set_output_summary("logging disabled")
         return {}
 
-    # Get or create session state. Try the session_id from input, or fall
-    # back to a stable per-hour seed so PostToolUse calls within the same
-    # session map to the same state file.
-    session_id = input_data.get('session_id')
-    if not session_id:
-        # SessionStart sentinel (<24h) keeps a session that crosses an hour
-        # boundary mapped to one state file instead of forking (OPT-04 #177).
-        session_id = read_current_session()
-    if not session_id:
-        session_seed = datetime.now().strftime("%Y-%m-%d-%H")
-        session_id = generate_session_id(session_seed)
+    # Get or create session state, resolved the same way by every hook.
+    session_state = get_session_state(resolve_session_id(input_data))
 
-    session_state = get_session_state(session_id)
-
+    # ONE lock acquisition for the whole invocation, with a snapshot taken inside
+    # it to feed everything downstream. Each locked access carries its own
+    # acquisition budget, so separate read/write/nag accesses could spend 4x that
+    # budget under contention and blow this hook's 3s timeout. Snapshotting inside
+    # the transaction also means the alerts describe exactly what was committed,
+    # not a re-read a concurrent writer may have moved. A busy lock drops this
+    # advisory telemetry rather than delaying the tool.
+    snapshot = {}
     if session_state:
-        session_state.increment('tool_count')
-        session_state.append_to_list('tools_used', {
-            'tool': tool_name,
-            'path': tool_path,
-            'timestamp': datetime.now().isoformat(),
-        })
+        try:
+            with session_state.transaction() as state:
+                state['tool_count'] = state.get('tool_count', 0) + 1
+                tools_used = _append_tool_event(state.get('tools_used'), {
+                    'tool': tool_name,
+                    'path': tool_path,
+                    'timestamp': datetime.now().isoformat(),
+                })
+                state['tools_used'] = tools_used
+                pending = dict(state)
+            # Publish only after the context manager committed. Assigning inside
+            # the block would leave `snapshot` holding values that a failed write
+            # never persisted, and the alerts below would describe state that does
+            # not exist on disk.
+            snapshot = pending
+        except StateUnavailable:
+            pass
 
     # Compute quality alerts AFTER tracking so the current event is included.
+    # Both consumers read the snapshot dict -- no further lock acquisitions.
     alerts = compute_in_session_alerts(
-        tools_used=session_state.get('tools_used', []) if session_state else [],
+        tools_used=snapshot.get('tools_used', []),
         tool_name=tool_name,
         tool_path=tool_path,
     )
-    alerts.extend(check_compact_nag(session_state))
+    alerts.extend(check_compact_nag(snapshot if session_state else None))
     if alerts:
         timer.set_output_summary(f"alerts: {len(alerts)}")
         return {"systemMessage": "\n".join(alerts)}

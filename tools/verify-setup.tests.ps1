@@ -6,10 +6,10 @@
     Tests the verify-setup shim forwarding and the check-quick.ps1 module's
     validation logic: expected command lists, settings parsing, hooks validation,
     environment variable checks, and permission categorization.
-    Uses isolated temp directories. Compatible with Pester 3.4.0+.
+    Uses isolated temp directories. Requires Pester 5.
 
 .EXAMPLE
-    Invoke-Pester C:\src\obiwag-agents\tools\verify-setup.tests.ps1
+    .\tools\run-tests.ps1 -Path tools\verify-setup.tests.ps1
 #>
 
 Describe 'Verify Setup' {
@@ -32,37 +32,37 @@ Describe 'Verify Setup' {
         It 'verify-setup.ps1 forwards to config-guardian.ps1 -Quick' {
             $shimPath = Join-Path $PSScriptRoot 'verify-setup.ps1'
             $content = Get-Content $shimPath -Raw
-            $content -match 'config-guardian\.ps1' | Should Be $true
-            $content -match '-Quick' | Should Be $true
-            $content -match '-CheckOnly' | Should Be $true
+            $content -match 'config-guardian\.ps1' | Should -Be $true
+            $content -match '-Quick' | Should -Be $true
+            $content -match '-CheckOnly' | Should -Be $true
         }
     }
 
     Context 'Expected Commands List' {
 
-        It 'Lists all 20 commands matching deploy.ps1' {
+        It 'Lists all 17 commands matching deploy.ps1' {
             # This is the authoritative list from deploy.ps1
             $deployRequired = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+                'author.md', 'discovery.md', 'integrate.md',
                 'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
                 'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
                 'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
+                'simplify.md'
             )
 
             # check-quick.ps1 expected commands must match
             $verifyExpected = @(
-                'author.md', 'discovery.md', 'doc.md', 'fixissue.md', 'integrate.md',
+                'author.md', 'discovery.md', 'integrate.md',
                 'learning.md', 'obi.md', 'obi-auto.md', 'obi-auto-max.md', 'obi-collect.md',
                 'obi-memory-review.md', 'obi-swarm.md', 'obi-update.md', 'readme.md',
                 'readme-review.md', 'release.md', 're-review.md', 'review.md',
-                'simplify.md', 'triage.md'
+                'simplify.md'
             )
 
-            $verifyExpected.Count | Should Be 20
+            $verifyExpected.Count | Should -Be 17
 
             $missing = $deployRequired | Where-Object { $_ -notin $verifyExpected }
-            $missing.Count | Should Be 0
+            $missing.Count | Should -Be 0
         }
 
         It 'Detects missing commands accurately' {
@@ -73,7 +73,7 @@ Describe 'Verify Setup' {
             }
 
             $expected = @(
-                'author.md', 'discovery.md', 'doc.md', 'integrate.md', 'learning.md',
+                'author.md', 'discovery.md', 'integrate.md', 'learning.md',
                 'obi.md', 'obi-auto.md', 'obi-collect.md', 'obi-memory-review.md',
                 'obi-swarm.md', 'obi-update.md', 'readme.md', 'readme-review.md',
                 'release.md', 're-review.md', 'review.md', 'simplify.md'
@@ -89,15 +89,15 @@ Describe 'Verify Setup' {
                 }
             }
 
-            $foundCount | Should Be 3
-            $missingCommands.Count | Should Be 14
-            ($missingCommands -contains 'doc.md') | Should Be $true
-            ($missingCommands -contains 'integrate.md') | Should Be $true
+            $foundCount | Should -Be 3
+            $missingCommands.Count | Should -Be 13
+            ($missingCommands -contains 'learning.md') | Should -Be $true
+            ($missingCommands -contains 'integrate.md') | Should -Be $true
         }
 
         It 'Reports full count when all commands deployed' {
             $expected = @(
-                'author.md', 'discovery.md', 'doc.md', 'integrate.md', 'learning.md',
+                'author.md', 'discovery.md', 'integrate.md', 'learning.md',
                 'obi.md', 'obi-auto.md', 'obi-collect.md', 'obi-memory-review.md',
                 'obi-swarm.md', 'obi-update.md', 'readme.md', 'readme-review.md',
                 'release.md', 're-review.md', 'review.md', 'simplify.md'
@@ -112,7 +112,7 @@ Describe 'Verify Setup' {
                 if (Test-Path (Join-Path $CommandsDir $cmd)) { $foundCount++ }
             }
 
-            $foundCount | Should Be $expected.Count
+            $foundCount | Should -Be $expected.Count
         }
     }
 
@@ -128,7 +128,7 @@ Describe 'Verify Setup' {
             $settings | ConvertTo-Json -Depth 5 | Set-Content $settingsPath -Encoding UTF8
 
             $parsed = Get-Content $settingsPath -Raw | ConvertFrom-Json
-            $parsed.permissions.allow.Count | Should Be 5
+            $parsed.permissions.allow.Count | Should -Be 5
         }
 
         It 'Counts permissions correctly' {
@@ -138,7 +138,7 @@ Describe 'Verify Setup' {
             $settings | ConvertTo-Json -Depth 5 | Set-Content $settingsPath -Encoding UTF8
 
             $parsed = Get-Content $settingsPath -Raw | ConvertFrom-Json
-            $parsed.permissions.allow.Count | Should Be 150
+            $parsed.permissions.allow.Count | Should -Be 150
         }
 
         It 'Handles missing permissions section' {
@@ -146,7 +146,7 @@ Describe 'Verify Setup' {
             @{ hooks = @{} } | ConvertTo-Json -Depth 5 | Set-Content $settingsPath -Encoding UTF8
 
             $parsed = Get-Content $settingsPath -Raw | ConvertFrom-Json
-            $parsed.permissions | Should BeNullOrEmpty
+            $parsed.permissions | Should -BeNullOrEmpty
         }
 
         It 'Detects invalid JSON' {
@@ -159,13 +159,13 @@ Describe 'Verify Setup' {
             } catch {
                 $parseable = $false
             }
-            $parseable | Should Be $false
+            $parseable | Should -Be $false
         }
     }
 
-    Context 'Settings Precedence' {
+    Context 'Settings Scope Merging' {
 
-        It 'Detects project-local override with fewer permissions' {
+        It 'merges shorter project allow arrays with user allows' {
             $userSettings = Join-Path $ClaudeDir 'settings.json'
             $projectSettings = Join-Path $ProjectDir 'settings.local.json'
 
@@ -180,29 +180,28 @@ Describe 'Verify Setup' {
             $userJson = Get-Content $userSettings -Raw | ConvertFrom-Json
             $projJson = Get-Content $projectSettings -Raw | ConvertFrom-Json
 
-            $userCount = $userJson.permissions.allow.Count
-            $projCount = $projJson.permissions.allow.Count
-
-            ($projCount -lt $userCount) | Should Be $true
+            $effective = @($userJson.permissions.allow) + @($projJson.permissions.allow) |
+                Sort-Object -Unique
+            $effective.Count | Should -Be 105
         }
 
-        It 'No override when project has more permissions' {
+        It 'keeps project deny rules separate and authoritative' {
             $userSettings = Join-Path $ClaudeDir 'settings.json'
             $projectSettings = Join-Path $ProjectDir 'settings.local.json'
 
             $userPerms = @('Read', 'Write')
             @{ permissions = @{ allow = $userPerms } } | ConvertTo-Json -Depth 5 | Set-Content $userSettings -Encoding UTF8
 
-            $projPerms = @('Read', 'Write', 'Glob', 'Grep', 'Edit')
-            @{ permissions = @{ allow = $projPerms } } | ConvertTo-Json -Depth 5 | Set-Content $projectSettings -Encoding UTF8
+            @{ permissions = @{ allow = @('Glob'); deny = @('Write') } } |
+                ConvertTo-Json -Depth 5 | Set-Content $projectSettings -Encoding UTF8
 
             $userJson = Get-Content $userSettings -Raw | ConvertFrom-Json
             $projJson = Get-Content $projectSettings -Raw | ConvertFrom-Json
 
-            $userCount = $userJson.permissions.allow.Count
-            $projCount = $projJson.permissions.allow.Count
-
-            ($projCount -lt $userCount) | Should Be $false
+            $conflicts = @($projJson.permissions.deny | Where-Object {
+                @($userJson.permissions.allow) -contains [string]$_
+            })
+            $conflicts | Should -Contain 'Write'
         }
     }
 
@@ -214,7 +213,7 @@ Describe 'Verify Setup' {
             Set-Content $settingsPath $content -Encoding UTF8
 
             $raw = Get-Content $settingsPath -Raw
-            ($raw -match '\$HOME') | Should Be $true
+            ($raw -match '\$HOME') | Should -Be $true
         }
 
         It 'Passes when no $HOME variable present in settings.json' {
@@ -223,7 +222,7 @@ Describe 'Verify Setup' {
             Set-Content $settingsPath $content -Encoding UTF8
 
             $raw = Get-Content $settingsPath -Raw
-            ($raw -match '\$HOME') | Should Be $false
+            ($raw -match '\$HOME') | Should -Be $false
         }
 
         It 'Detects CLAUDE_PROJECT_ROOT usage when variable is not set' {
@@ -233,7 +232,7 @@ Describe 'Verify Setup' {
 
             $raw = Get-Content $settingsPath -Raw
             $usesVar = ($raw -match '\$\{CLAUDE_PROJECT_ROOT\}')
-            $usesVar | Should Be $true
+            $usesVar | Should -Be $true
         }
 
         It 'Detects hooks section in settings.json' {
@@ -248,7 +247,7 @@ Describe 'Verify Setup' {
             $content | ConvertTo-Json -Depth 5 | Set-Content $settingsPath -Encoding UTF8
 
             $parsed = Get-Content $settingsPath -Raw | ConvertFrom-Json
-            $parsed.hooks | Should Not BeNullOrEmpty
+            $parsed.hooks | Should -Not -BeNullOrEmpty
         }
     }
 
@@ -259,12 +258,32 @@ Describe 'Verify Setup' {
             New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 
             # Path exists
-            (Test-Path $testRoot) | Should Be $true
+            (Test-Path $testRoot) | Should -Be $true
         }
 
         It 'Detects missing Python' {
             $fakeCmd = Get-Command 'nonexistent-python-binary-12345' -ErrorAction SilentlyContinue
-            $fakeCmd | Should BeNullOrEmpty
+            $fakeCmd | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'Peer Review Harness Check' {
+
+        It 'requires canonical artifacts and detects stale review paths' {
+            $checkPath = Join-Path $PSScriptRoot 'lib\checks\check-quick.ps1'
+            $source = Get-Content -LiteralPath $checkPath -Raw
+            foreach ($required in @(
+                'peer-review.ps1', 'peer_review\adapters.py',
+                'peer_review\broker.py', 'peer_review\runner.py', 'peer-review-result.schema.json',
+                'peer-review-status.schema.json'
+            )) {
+                $source | Should -Match ([regex]::Escape($required))
+            }
+            $source | Should -Match 'codex-adversarial-review'
+            $source | Should -Match 'codex-run.ps1'
+            $source | Should -Match 'Retired peer-review paths remain active'
+            $source | Should -Match 'arrays merge across scopes'
+            $source | Should -Not -Match 'PROJECT-LOCAL OVERRIDE'
         }
     }
 
@@ -276,7 +295,7 @@ Describe 'Verify Setup' {
                         elseif ($count -ge 20) { 'moderate' }
                         elseif ($count -gt 0) { 'limited' }
                         else { 'none' }
-            $category | Should Be 'comprehensive'
+            $category | Should -Be 'comprehensive'
         }
 
         It 'Categorizes 20-99 as moderate' {
@@ -285,7 +304,7 @@ Describe 'Verify Setup' {
                         elseif ($count -ge 20) { 'moderate' }
                         elseif ($count -gt 0) { 'limited' }
                         else { 'none' }
-            $category | Should Be 'moderate'
+            $category | Should -Be 'moderate'
         }
 
         It 'Categorizes 1-19 as limited' {
@@ -294,7 +313,7 @@ Describe 'Verify Setup' {
                         elseif ($count -ge 20) { 'moderate' }
                         elseif ($count -gt 0) { 'limited' }
                         else { 'none' }
-            $category | Should Be 'limited'
+            $category | Should -Be 'limited'
         }
 
         It 'Categorizes 0 as none' {
@@ -303,7 +322,7 @@ Describe 'Verify Setup' {
                         elseif ($count -ge 20) { 'moderate' }
                         elseif ($count -gt 0) { 'limited' }
                         else { 'none' }
-            $category | Should Be 'none'
+            $category | Should -Be 'none'
         }
     }
 }

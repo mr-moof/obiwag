@@ -7,12 +7,16 @@ Provides centralized logging for hook execution visibility:
 """
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.paths import get_obi_root
+
+
+LOG_READ_TAIL_BYTES = 2 * 1024 * 1024
 
 
 def get_hook_log_path() -> Path:
@@ -58,10 +62,8 @@ def log_swallowed(component: str, exc: BaseException) -> None:
             'error_class': type(exc).__name__,
             'message': message,
         }
-        from core.jsonl_helper import append_jsonl
         log_path = get_swallowed_log_path()
-        append_jsonl(log_path, entry)
-        _rotate_log_if_needed(log_path)
+        append_rotating_jsonl(log_path, entry)
     except Exception:
         # Logging a swallowed error must itself never raise.
         pass
@@ -80,15 +82,14 @@ def get_swallowed_stats(hours: int = 168) -> Dict[str, Any]:
 
     entries: List[Dict[str, Any]] = []
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        for line in _read_recent_lines(path):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     except Exception:
         return {'window_hours': hours, 'total': 0, 'by_component': {}}
 
@@ -206,16 +207,87 @@ class HookTimer:
 
             log_path = get_hook_log_path()
 
-            # Append to file
-            from core.jsonl_helper import append_jsonl
-            append_jsonl(log_path, log_entry)
-
-            # Rotate if file gets too large (>1MB)
-            _rotate_log_if_needed(log_path)
+            append_rotating_jsonl(log_path, log_entry)
 
         except Exception:
             # Never let logging failure block hook execution
             pass
+
+
+def _log_lock_path(log_path: Path) -> str:
+    return str(log_path.with_name(f"{log_path.name}.lock"))
+
+
+def _read_recent_lines(
+    log_path: Path,
+    *,
+    max_bytes: int = LOG_READ_TAIL_BYTES,
+) -> List[str]:
+    """Read a bounded, complete-line tail from a potentially damaged JSONL log."""
+    size = log_path.stat().st_size
+    byte_limit = max(1024, max_bytes)
+    start = max(0, size - byte_limit)
+    with open(log_path, 'rb') as handle:
+        handle.seek(start)
+        data = handle.read(byte_limit)
+    if start:
+        newline = data.find(b'\n')
+        data = data[newline + 1:] if newline >= 0 else b''
+    return data.decode('utf-8', errors='replace').splitlines()
+
+
+def _rotate_log_unlocked(log_path: Path, max_size_bytes: int) -> None:
+    """Publish a bounded recent tail. Caller must hold the log sidecar lock."""
+    file_size = log_path.stat().st_size
+    if file_size <= max_size_bytes:
+        return
+
+    retain_bytes = max(1, max_size_bytes // 2)
+    start = max(0, file_size - retain_bytes)
+    with open(log_path, 'rb') as handle:
+        handle.seek(start)
+        data = handle.read(retain_bytes)
+    if start:
+        newline = data.find(b'\n')
+        data = data[newline + 1:] if newline >= 0 else b''
+
+    temp_path = log_path.with_name(
+        f".{log_path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    try:
+        with open(temp_path, 'wb') as handle:
+            handle.write(data)
+        last_error: OSError | None = None
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, log_path)
+                return
+            except OSError as exc:
+                last_error = exc
+                if attempt < 4:
+                    time.sleep(0.02)
+        if last_error is not None:
+            raise last_error
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def append_rotating_jsonl(
+    log_path: Path,
+    entry: Dict[str, Any],
+    *,
+    max_size_bytes: int = 1_000_000,
+) -> None:
+    """Serialize append plus bounded rotation across concurrent hook processes."""
+    from core.jsonl_helper import append_jsonl
+    from core.session_state import bounded_file_lock
+
+    with bounded_file_lock(_log_lock_path(log_path)):
+        append_jsonl(log_path, entry)
+        _rotate_log_unlocked(log_path, max_size_bytes)
 
 
 def _rotate_log_if_needed(log_path: Path, max_size_bytes: int = 1_000_000) -> None:
@@ -231,21 +303,10 @@ def _rotate_log_if_needed(log_path: Path, max_size_bytes: int = 1_000_000) -> No
         if not log_path.exists():
             return
 
-        file_size = log_path.stat().st_size
-        if file_size <= max_size_bytes:
-            return
+        from core.session_state import bounded_file_lock
 
-        # Read all lines
-        with open(log_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        # Keep the most recent half
-        keep_count = len(lines) // 2
-        lines_to_keep = lines[-keep_count:] if keep_count > 0 else lines[-100:]
-
-        # Write back
-        with open(log_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines_to_keep)
+        with bounded_file_lock(_log_lock_path(log_path)):
+            _rotate_log_unlocked(log_path, max_size_bytes)
 
     except Exception:
         pass
@@ -267,14 +328,13 @@ def get_recent_hook_logs(limit: int = 50) -> List[Dict[str, Any]]:
 
     try:
         entries = []
-        with open(log_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        entries.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+        for line in _read_recent_lines(log_path):
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
 
         # Return most recent first, limited
         return entries[-limit:][::-1]

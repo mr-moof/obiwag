@@ -50,8 +50,9 @@ def _make_catch(
     ts=None,
     ref="TEST-1",
     phase="review",
+    peer_provider=None,
 ):
-    return {
+    entry = {
         "ts": ts or datetime.now(timezone.utc).isoformat(),
         "repo": "test-repo",
         "ref": ref,
@@ -61,6 +62,33 @@ def _make_catch(
         "summary": f"Test catch for {category}",
         "disputed": disputed,
         "dispute_resolution": dispute_resolution,
+    }
+    if peer_provider is not None:
+        entry["peer_provider"] = peer_provider
+    return entry
+
+
+def _make_attempt(
+    pass_id="pass-1",
+    duration_ms=100,
+    finding_count=0,
+    accepted_count=0,
+    ref="RUN-1",
+    phase="plan",
+    peer_provider="codex",
+):
+    return {
+        "record_type": "attempt",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "repo": "test-repo",
+        "ref": ref,
+        "phase": phase,
+        "peer_provider": peer_provider,
+        "pass_id": pass_id,
+        "duration_ms": duration_ms,
+        "finding_count": finding_count,
+        "accepted_count": accepted_count,
+        "outcome": "zero_findings" if finding_count == 0 else "findings",
     }
 
 
@@ -112,8 +140,23 @@ class TestCatchStatsCli:
             "total", "confirmed", "by_category", "by_severity",
             "by_phase", "disputed", "codex_right", "claude_right",
             "unresolved", "dispute_win_rate", "trend_days", "trend_count",
+            "attempts", "zero_finding_attempts", "attempts_with_accepted",
+            "attempt_acceptance_rate", "accepted_per_attempt", "pass_ids",
+            "attempt_duration_ms",
         ):
             assert key in payload, f"missing key {key}"
+
+    def test_claude_peer_entries_do_not_pollute_codex_analytics(self, tmp_path):
+        catches_path = tmp_path / ".obi" / "codex-catches.jsonl"
+        _write_catches(catches_path, [
+            _make_catch(ref="OLD-CODEX"),
+            _make_catch(ref="NEW-CODEX", peer_provider="codex"),
+            _make_catch(ref="CLAUDE", peer_provider="claude"),
+        ])
+        code, out = _run_cli(["--json"], catches_path)
+        assert code == 0
+        payload = json.loads(out)
+        assert payload["total"] == 2
 
     def test_category_counts(self, tmp_path):
         catches_path = tmp_path / ".obi" / "codex-catches.jsonl"
@@ -226,6 +269,49 @@ class TestCatchStatsCli:
         payload = json.loads(out)
         assert payload["total"] == 3
         assert payload["confirmed"] == 2
+
+    def test_legacy_findings_remain_findings_without_attempt_rows(self, tmp_path):
+        catches_path = tmp_path / ".obi" / "codex-catches.jsonl"
+        _write_catches(catches_path, [_make_catch(ref="LEGACY")])
+        _, out = _run_cli(["--json"], catches_path)
+        payload = json.loads(out)
+        assert payload["total"] == 1
+        assert payload["attempts"] == 0
+        assert payload["accepted_per_attempt"] is None
+
+    def test_mixed_attempts_report_zero_findings_acceptance_and_duration(self, tmp_path):
+        catches_path = tmp_path / ".obi" / "codex-catches.jsonl"
+        _write_catches(catches_path, [
+            _make_catch(ref="LEGACY"),
+            _make_attempt(pass_id="p-zero", duration_ms=100),
+            _make_attempt(
+                pass_id="p-findings", duration_ms=300,
+                finding_count=2, accepted_count=1, ref="RUN-2",
+            ),
+            _make_attempt(pass_id="claude", peer_provider="claude"),
+        ])
+        _, out = _run_cli(["--json"], catches_path)
+        payload = json.loads(out)
+        assert payload["total"] == 1
+        assert payload["attempts"] == 2
+        assert payload["zero_finding_attempts"] == 1
+        assert payload["attempts_with_accepted"] == 1
+        assert payload["attempt_acceptance_rate"] == 0.5
+        assert payload["accepted_per_attempt"] == 0.5
+        assert payload["pass_ids"] == ["p-findings", "p-zero"]
+        assert payload["attempt_duration_ms"] == {
+            "count": 2,
+            "median": 200.0,
+            "total": 400,
+        }
+
+    def test_attempt_only_table_is_not_reported_as_empty(self, tmp_path):
+        catches_path = tmp_path / ".obi" / "codex-catches.jsonl"
+        _write_catches(catches_path, [_make_attempt()])
+        code, out = _run_cli([], catches_path)
+        assert code == 0
+        assert "Attempts: 1" in out
+        assert "Pass IDs: pass-1" in out
 
 
 if __name__ == "__main__":

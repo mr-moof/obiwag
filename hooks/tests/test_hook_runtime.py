@@ -49,6 +49,11 @@ class TestReadHookInput:
         with patch.object(sys, "stdin", io.StringIO('{"x": 1}')):
             assert hook_runtime.read_hook_input() == {"x": 1}
 
+    def test_oversized_input_fails_fast_and_explicitly(self, monkeypatch):
+        monkeypatch.setattr(hook_runtime, 'MAX_HOOK_INPUT_CHARS', 32)
+        with pytest.raises(hook_runtime.HookInputTooLarge, match='exceeds'):
+            hook_runtime.read_hook_input(io.StringIO('x' * 33))
+
 
 # ---------------------------------------------------------------------------
 # emit_hook_output

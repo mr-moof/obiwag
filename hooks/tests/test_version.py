@@ -9,6 +9,7 @@ shim is retained for one release via PEP 562 ``__getattr__``.
 
 import builtins
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -81,6 +82,50 @@ def test_bogus_attribute_raises_attribute_error():
 def test_no_module_level_current_version_constant():
     """The eager module-level constant must be gone (only the shim remains)."""
     assert "CURRENT_VERSION" not in version_module.__dict__
+
+
+def test_check_for_updates_uses_resolved_remote_default(monkeypatch, tmp_path):
+    """Fetch, compare, and log all target the resolved remote default branch."""
+    calls = []
+    responses = iter([
+        subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="1\n", stderr=""),
+        subprocess.CompletedProcess([], 0, stdout="abc123 fix\n", stderr=""),
+    ])
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return next(responses)
+
+    monkeypatch.setattr(version_module, "get_obi_source_repo", lambda: tmp_path)
+    monkeypatch.setattr(version_module, "get_remote_default_branch", lambda _repo: "main")
+    monkeypatch.setattr(version_module.subprocess, "run", fake_run)
+
+    has_updates, _, commits = version_module.check_for_updates()
+
+    assert has_updates is True
+    assert commits == ["abc123 fix"]
+    assert calls[0] == ["git", "fetch", "origin", "main"]
+    assert calls[1] == ["git", "rev-list", "--count", "HEAD..origin/main"]
+    assert calls[2] == ["git", "log", "--oneline", "HEAD..origin/main"]
+
+
+def test_apply_updates_pulls_resolved_remote_default(monkeypatch, tmp_path):
+    """The updater pulls the remote default branch before deployment."""
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(version_module, "get_obi_source_repo", lambda: tmp_path)
+    monkeypatch.setattr(version_module, "get_remote_default_branch", lambda _repo: "main")
+    monkeypatch.setattr(version_module.subprocess, "run", fake_run)
+
+    success, _ = version_module.apply_updates()
+
+    assert success is True
+    assert calls[0] == ["git", "pull", "origin", "main"]
 
 
 if __name__ == "__main__":

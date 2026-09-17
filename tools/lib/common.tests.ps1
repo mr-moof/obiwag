@@ -4,46 +4,49 @@
 
 .DESCRIPTION
     Tests shared output helpers and Test-HookCommandPaths function.
-    Compatible with Pester 3.4.0+.
+    Requires Pester 5.
 
 .EXAMPLE
-    Invoke-Pester C:\Users\user\source\obiwag-agents\tools\lib\common.tests.ps1
+    .\tools\run-tests.ps1 -Path tools\lib\common.tests.ps1
 #>
+BeforeAll {
 
 # Dot-source the module under test
 $ScriptDir = $PSScriptRoot
 . (Join-Path $ScriptDir 'common.ps1')
+
+}
 
 Describe 'Shared Helpers (common.ps1)' {
 
     Context 'Output Helpers Exist' {
 
         It 'Defines Write-Header' {
-            (Get-Command Write-Header -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Header -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Step' {
-            (Get-Command Write-Step -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Step -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Check' {
-            (Get-Command Write-Check -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Check -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Info' {
-            (Get-Command Write-Info -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Info -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Problem' {
-            (Get-Command Write-Problem -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Problem -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Detail' {
-            (Get-Command Write-Detail -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Detail -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
 
         It 'Defines Write-Repair' {
-            (Get-Command Write-Repair -ErrorAction SilentlyContinue) | Should Not BeNullOrEmpty
+            (Get-Command Write-Repair -ErrorAction SilentlyContinue) | Should -Not -BeNullOrEmpty
         }
     }
 
@@ -56,8 +59,8 @@ Describe 'Shared Helpers (common.ps1)' {
 
         It 'Returns valid result for missing settings file' {
             $result = Test-HookCommandPaths -SettingsPath 'C:\nonexistent\settings.json'
-            $result.Valid | Should Be $true
-            $result.MissingPaths.Count | Should Be 0
+            $result.Valid | Should -Be $true
+            $result.MissingPaths.Count | Should -Be 0
         }
 
         It 'Returns valid result for settings with no hooks' {
@@ -65,7 +68,7 @@ Describe 'Shared Helpers (common.ps1)' {
             @{ permissions = @{ allow = @('Read') } } | ConvertTo-Json -Depth 5 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath
-            $result.Valid | Should Be $true
+            $result.Valid | Should -Be $true
         }
 
         It 'Detects missing hook script path' {
@@ -87,9 +90,9 @@ Describe 'Shared Helpers (common.ps1)' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath
-            $result.Valid | Should Be $false
-            $result.MissingPaths.Count | Should Be 1
-            ($result.MissingPaths[0] -like '*hook_wrapper.cmd') | Should Be $true
+            $result.Valid | Should -Be $false
+            $result.MissingPaths.Count | Should -Be 1
+            ($result.MissingPaths[0] -like '*hook_wrapper.cmd') | Should -Be $true
         }
 
         It 'Reports valid when hook script exists' {
@@ -116,8 +119,99 @@ Describe 'Shared Helpers (common.ps1)' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath
-            $result.Valid | Should Be $true
-            $result.MissingPaths.Count | Should Be 0
+            $result.Valid | Should -Be $true
+            $result.MissingPaths.Count | Should -Be 0
+        }
+
+        It 'Validates script paths in exec-form args' {
+            $hooksDir = Join-Path $TempDir 'hooks'
+            New-Item -ItemType Directory -Path $hooksDir -Force | Out-Null
+            $scriptPath = Join-Path $hooksDir 'user_prompt_submit.py'
+            Set-Content $scriptPath '# placeholder' -Encoding UTF8
+
+            $settingsPath = Join-Path $TempDir 'settings.json'
+            $settings = @{
+                hooks = @{
+                    UserPromptSubmit = @(
+                        @{
+                            hooks = @(
+                                @{
+                                    type    = 'command'
+                                    command = 'python'
+                                    args    = @(($scriptPath -replace '\\', '/'))
+                                    timeout = 10
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+
+            $result = Test-HookCommandPaths -SettingsPath $settingsPath
+            $result.Valid | Should -Be $true
+            $result.MissingPaths.Count | Should -Be 0
+        }
+
+        It 'Detects a missing script path in exec-form args' {
+            $settingsPath = Join-Path $TempDir 'settings.json'
+            $settings = @{
+                hooks = @{
+                    UserPromptSubmit = @(
+                        @{
+                            hooks = @(
+                                @{
+                                    type    = 'command'
+                                    command = 'python'
+                                    args    = @('C:/missing/user_prompt_submit.py')
+                                    timeout = 10
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+
+            $result = Test-HookCommandPaths -SettingsPath $settingsPath
+            $result.Valid | Should -Be $false
+            $result.MissingPaths | Should -Contain 'C:/missing/user_prompt_submit.py'
+        }
+
+        It 'Discovers scripts under hook events added after the original event list' {
+            $settingsPath = Join-Path $TempDir 'settings.json'
+            $settings = @{
+                hooks = @{
+                    PostToolUseFailure = @(
+                        @{
+                            hooks = @(
+                                @{
+                                    type    = 'command'
+                                    command = 'python'
+                                    args    = @('C:/missing/post_tool_use.py')
+                                }
+                            )
+                        }
+                    )
+                    SubagentStop = @(
+                        @{
+                            hooks = @(
+                                @{
+                                    type    = 'command'
+                                    command = 'python'
+                                    args    = @('C:/missing/subagent_stop.py')
+                                }
+                            )
+                        }
+                    )
+                }
+            }
+            $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+
+            $result = Test-HookCommandPaths -SettingsPath $settingsPath
+            $result.Valid | Should -Be $false
+            $result.MissingPaths | Should -Contain 'C:/missing/post_tool_use.py'
+            $result.MissingPaths | Should -Contain 'C:/missing/subagent_stop.py'
         }
 
         It 'Uses FallbackDir when primary path is missing' {
@@ -143,8 +237,8 @@ Describe 'Shared Helpers (common.ps1)' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath -FallbackDir $fallbackDir
-            $result.Valid | Should Be $true
-            $result.MissingPaths.Count | Should Be 0
+            $result.Valid | Should -Be $true
+            $result.MissingPaths.Count | Should -Be 0
         }
 
         It 'Reports missing even with FallbackDir when both miss' {
@@ -169,8 +263,8 @@ Describe 'Shared Helpers (common.ps1)' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath -FallbackDir $fallbackDir
-            $result.Valid | Should Be $false
-            $result.MissingPaths.Count | Should Be 1
+            $result.Valid | Should -Be $false
+            $result.MissingPaths.Count | Should -Be 1
         }
 
         It 'Handles multiple hook types' {
@@ -196,9 +290,9 @@ Describe 'Shared Helpers (common.ps1)' {
             $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
 
             $result = Test-HookCommandPaths -SettingsPath $settingsPath
-            $result.Valid | Should Be $false
+            $result.Valid | Should -Be $false
             # Same script path referenced twice, but reported for each occurrence
-            $result.MissingPaths.Count | Should BeGreaterThan 0
+            $result.MissingPaths.Count | Should -BeGreaterThan 0
         }
 
         It 'Expands $HOME in commands' {
@@ -228,8 +322,8 @@ Describe 'Shared Helpers (common.ps1)' {
             # unless $HOME/.claude/hooks/hook_wrapper.cmd actually exists on disk
             $result = Test-HookCommandPaths -SettingsPath $settingsPath
             # Just verify it runs without error and returns valid structure
-            $result.Keys -contains 'Valid' | Should Be $true
-            $result.Keys -contains 'MissingPaths' | Should Be $true
+            $result.Keys -contains 'Valid' | Should -Be $true
+            $result.Keys -contains 'MissingPaths' | Should -Be $true
         }
     }
 }

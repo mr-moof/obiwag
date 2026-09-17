@@ -75,17 +75,162 @@ function Get-ObiHooksFromRepo {
         ForEach-Object { $_.FullName.Substring($HooksDir.Length + 1).Replace('\', '/') })
 }
 
-# Collision-aware remove (#167). Compares target file's SHA256 against the
-# source file (the manifest's source-rel resolved to an absolute path). If
-# the target has been user-modified (hashes differ):
+function Get-ObiSkillFilesFromRepo {
+    return @(Get-ChildItem -Path $SkillsDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notlike '*__pycache__*' -and $_.FullName -notlike '*.pytest_cache*' } |
+        ForEach-Object { $_.FullName.Substring($SkillsDir.Length + 1).Replace('\', '/') })
+}
+
+function Resolve-ObiSourcePath {
+    param(
+        [string]$SourceRel,
+        [string]$RepoRoot
+    )
+
+    if (-not $SourceRel) { return $null }
+    if ([System.IO.Path]::IsPathRooted($SourceRel)) { return $SourceRel }
+
+    $candidate = Join-Path $RepoRoot $SourceRel
+    if (-not (Test-PathUnderRoot -CandidatePath $candidate -Root $RepoRoot)) {
+        return $null
+    }
+    return $candidate
+}
+
+# Best-effort migration bridge for schema-1 manifests, which did not record
+# deployed hashes. A working-tree source may have advanced while the installed
+# target still equals the checked-in HEAD blob from the previous deployment.
+# New schema-2 manifests do not depend on this Git fallback.
+function Test-ObiTargetMatchesGitHead {
+    param(
+        [string]$TargetFile,
+        [string]$SourceRel,
+        [string]$RepoRoot
+    )
+
+    if (-not $SourceRel -or [System.IO.Path]::IsPathRooted($SourceRel)) { return $false }
+    if ($SourceRel -match '(^|[\\/])\.\.([\\/]|$)') { return $false }
+
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $git) { return $false }
+
+    try {
+        $normalizedSource = $SourceRel.Replace('\', '/')
+        $headHash = @(& $git.Source -C $RepoRoot rev-parse --verify "HEAD:$normalizedSource" 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $headHash.Count -ne 1) { return $false }
+
+        $targetHash = @(& $git.Source -C $RepoRoot hash-object -- $TargetFile 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $targetHash.Count -ne 1) { return $false }
+
+        return ([string]$headHash[0]).Trim() -eq ([string]$targetHash[0]).Trim()
+    } catch {
+        return $false
+    }
+}
+
+function Get-ObiOwnedFileCollision {
+    param(
+        [string]$TargetFile,
+        [string]$DeployedRel,
+        [string]$CategoryLabel,
+        [string]$SourceRel,
+        [string]$RepoRoot,
+        [string]$DeployedHash
+    )
+
+    if (-not (Test-Path -LiteralPath $TargetFile -PathType Leaf)) { return $null }
+
+    $sourcePath = Resolve-ObiSourcePath -SourceRel $SourceRel -RepoRoot $RepoRoot
+    try {
+        $targetHash = (Get-FileHash -LiteralPath $TargetFile -Algorithm SHA256 -ErrorAction Stop).Hash
+
+        # The prior deployment hash is the authoritative ownership baseline.
+        if ($DeployedHash -and $targetHash -eq $DeployedHash) { return $null }
+
+        # A retry after a partially completed copy is also safe: the target may
+        # already equal the current source even though the old manifest remains.
+        if ($sourcePath -and (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            $sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256 -ErrorAction Stop).Hash
+            if ($targetHash -eq $sourceHash) { return $null }
+
+            # Schema-1 migration: recognize the checked-in pre-edit source.
+            if (-not $DeployedHash -and
+                (Test-ObiTargetMatchesGitHead -TargetFile $TargetFile -SourceRel $SourceRel -RepoRoot $RepoRoot)) {
+                return $null
+            }
+        }
+
+        return [pscustomobject]@{
+            Category = $CategoryLabel
+            Target   = $TargetFile
+            Source   = if ($sourcePath) { $sourcePath } else { $SourceRel }
+            Reason   = if ($DeployedHash) { 'deployed-hash-mismatch' } else { 'legacy-baseline-unavailable' }
+        }
+    } catch {
+        return [pscustomobject]@{
+            Category = "$CategoryLabel (hash-failure)"
+            Target   = $TargetFile
+            Source   = if ($sourcePath) { $sourcePath } else { $SourceRel }
+            Reason   = $_.Exception.Message
+        }
+    }
+}
+
+function Write-ClaudeDeploymentManifest {
+    $deployedHashes = @{}
+
+    foreach ($deployedRel in @($script:manifest.Keys | Sort-Object)) {
+        # tools/* is deployed to OBI_HOME rather than ClaudeTarget and is not
+        # part of Claude cleanup/collision ownership.
+        if ($deployedRel -like 'tools/*') { continue }
+
+        $targetFile = Join-Path $ClaudeTarget $deployedRel
+        if (-not (Test-PathUnderRoot -CandidatePath $targetFile -Root $ClaudeTarget)) {
+            Add-DeployFailure -Stage 'Manifest' -Detail "Unsafe deployed path: $deployedRel"
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf)) { continue }
+
+        try {
+            $deployedHashes[$deployedRel] = (Get-FileHash -LiteralPath $targetFile -Algorithm SHA256 -ErrorAction Stop).Hash
+        } catch {
+            Add-DeployFailure -Stage 'Manifest' -Detail "Hash failed for ${deployedRel}: $($_.Exception.Message)"
+        }
+    }
+
+    if ($script:deployFailures.Count -gt 0) {
+        Write-Info 'Skipped deployment manifest update because deployment failures are pending'
+        return
+    }
+
+    $obiDir = Join-Path $ClaudeTarget '.obi'
+    if (-not (Test-Path -LiteralPath $obiDir)) {
+        New-Item -ItemType Directory -Path $obiDir -Force | Out-Null
+    }
+    $manifestObj = @{
+        version = '2.0'
+        deployed_at = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        mappings = $script:manifest
+        deployed_hashes = $deployedHashes
+    }
+    $manifestPath = Join-Path $obiDir 'deployment-manifest.json'
+    $manifestJson = $manifestObj | ConvertTo-Json -Depth 5
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($manifestPath, $manifestJson, $utf8NoBom)
+    Write-Check "Deployment manifest written ($($script:manifest.Count) entries, $($deployedHashes.Count) hashes)"
+}
+
+# Collision-aware remove (#167). Collision classification is normally completed
+# for the entire cleanup plan before this function mutates any file. Direct
+# callers retain the same fail-closed behavior through the unchecked fallback.
+# If the target has been user-modified:
 #   - Records the collision in $script:obiCollisions for the post-cleanup
 #     gate to read.
 #   - If $Force: copies target to <target>.user-backup (only if
 #     .user-backup doesn't already exist) AND removes the target.
 #   - If not $Force: skips the remove (target preserved for user).
-# If the source can't be resolved (no manifest entry / fallback path),
-# falls through to the legacy unconditional-remove behavior — no regression
-# on pre-167 deploys.
+# If neither a deployed hash nor a resolvable source can prove ownership, the
+# classifier fails closed and preserves the target unless -Force is explicit.
 function Remove-ObiOwnedFile {
     param(
         [string]$TargetFile,
@@ -93,66 +238,50 @@ function Remove-ObiOwnedFile {
         [string]$CategoryLabel,
         [string]$SourceRel,
         [string]$RepoRoot,
+        [string]$DeployedHash,
         [switch]$DryRun,
-        [switch]$Force
+        [switch]$Force,
+        [switch]$CollisionChecked,
+        [switch]$CollisionDetected,
+        [switch]$KeepTarget
     )
 
-    $sourcePath = $null
-    if ($SourceRel) {
-        if ([System.IO.Path]::IsPathRooted($SourceRel)) {
-            $sourcePath = $SourceRel  # external command (172) — absolute
+    if (-not $CollisionChecked) {
+        $collision = Get-ObiOwnedFileCollision -TargetFile $TargetFile -DeployedRel $DeployedRel `
+            -CategoryLabel $CategoryLabel -SourceRel $SourceRel -RepoRoot $RepoRoot `
+            -DeployedHash $DeployedHash
+        $CollisionDetected = $null -ne $collision
+        if ($CollisionDetected) { $script:obiCollisions += $collision }
+    }
+
+    if ($CollisionDetected) {
+        if (-not $Force) { return }
+
+        # -Force preserves the earliest user version before removal. DryRun
+        # previews the same operation without writing.
+        $backupPath = "$TargetFile.user-backup"
+        if ($DryRun) {
+            if (-not (Test-Path -LiteralPath $backupPath)) {
+                Write-Info "Would back up user-modified $CategoryLabel -> .user-backup: $DeployedRel"
+            } else {
+                Write-Info "Would skip backup (earlier .user-backup preserved): $DeployedRel"
+            }
         } else {
-            $sourcePath = Join-Path $RepoRoot $SourceRel
+            if (-not (Test-Path -LiteralPath $backupPath)) {
+                Copy-Item -LiteralPath $TargetFile -Destination $backupPath -ErrorAction Stop
+                Write-Info "Backed up user-modified $CategoryLabel -> .user-backup: $DeployedRel"
+            } else {
+                Write-Info "Skipped backup (earlier .user-backup preserved): $DeployedRel"
+            }
         }
     }
 
-    if ($sourcePath -and (Test-Path -LiteralPath $sourcePath)) {
-        try {
-            $tgtHash = (Get-FileHash -LiteralPath $TargetFile -Algorithm SHA256).Hash
-            $srcHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
-            if ($tgtHash -ne $srcHash) {
-                $script:obiCollisions += [pscustomobject]@{
-                    Category = $CategoryLabel
-                    Target   = $TargetFile
-                    Source   = $sourcePath
-                }
-                if (-not $Force) {
-                    return  # skip the remove; target preserved
-                }
-                # -Force: backup before remove (preserve user's earliest version).
-                # DryRun preview must NOT write to disk (Codex Recipe 1 #1).
-                $backupPath = "$TargetFile.user-backup"
-                if ($DryRun) {
-                    if (-not (Test-Path -LiteralPath $backupPath)) {
-                        Write-Info "Would back up user-modified $CategoryLabel -> .user-backup: $DeployedRel"
-                    } else {
-                        Write-Info "Would skip backup (earlier .user-backup preserved): $DeployedRel"
-                    }
-                } else {
-                    if (-not (Test-Path -LiteralPath $backupPath)) {
-                        Copy-Item -LiteralPath $TargetFile -Destination $backupPath
-                        Write-Info "Backed up user-modified $CategoryLabel -> .user-backup: $DeployedRel"
-                    } else {
-                        Write-Info "Skipped backup (earlier .user-backup preserved): $DeployedRel"
-                    }
-                }
-            }
-        } catch {
-            # Hash compute failed (permission denied, IO race, etc.). Fail
-            # closed (Codex Recipe 1 #3): treat as collision and skip the
-            # remove. -Force still proceeds (with no backup since we can't
-            # confirm content differs) so a determined operator can recover.
-            $script:obiCollisions += [pscustomobject]@{
-                Category = "$CategoryLabel (hash-failure)"
-                Target   = $TargetFile
-                Source   = $sourcePath
-            }
-            Write-Info "Hash compare failed for ${DeployedRel}: $($_.Exception.Message) -- treating as collision"
-            if (-not $Force) {
-                return
-            }
-        }
-    }
+    # Current mappings are updated in place by Invoke-ClaudeDeploy. Retaining
+    # them avoids a delete-recopy availability window and leaves the last-good
+    # target present if a later copy fails. Only stale mappings are removed.
+    # settings.json is always retained because its source is user-specific and
+    # may legitimately be absent in another checkout/user context.
+    if ($KeepTarget) { return }
 
     if ($DryRun) {
         Write-Info "Would remove obi ${CategoryLabel}: $DeployedRel"
@@ -177,35 +306,46 @@ function Invoke-ClaudeCleanup {
     # Build obi-owned directory names for commands, agents, and skills.
     # Uses deployment manifest when available; falls back to repo enumeration.
     $manifestPath = Join-Path $ClaudeTarget '.obi\deployment-manifest.json'
-    $obiOwnedSkills   = @()
-    $obiOwnedCommands = @()
-    $obiOwnedAgents   = @()
+    $obiOwnedSkills     = @()
+    $obiOwnedSkillFiles = @()
+    $obiOwnedCommands   = @()
+    $obiOwnedAgents     = @()
+    $obiOwnedDocs       = @()
+    $obiOwnedHooks      = @()
+    $obiOwnedOtherFiles = @()
+    $script:obiCollisions = @()
 
-    # Skills installed by external tooling (not owned by this repo's deploy).
-    # Old manifests on disk may still reference such skills, so the cleanup
-    # below would unhelpfully delete the externally-installed copy. Add any
-    # such skill names here to exclude them from cleanup. Empty by default.
+    # Reserved for explicitly configured externally managed skills.
     $externallyManagedSkills = @()
 
-    # $obiSourceMap maps deployed-rel → source-rel. Used by collision detection
-    # (167) to resolve the Obi source for each manifest-tracked target file.
-    # Empty when manifest is missing — collision detection falls through to
-    # legacy unconditional remove for that category. Fallback (repo-enum) sets
-    # entries to $null since fallback names lack source-rel info.
+    # Maps provide both the source location and the exact bytes written by the
+    # prior successful deployment. Schema-1 manifests have only source paths;
+    # Test-ObiTargetMatchesGitHead supplies a bounded migration bridge.
     $obiSourceMap = @{}
+    $obiDeployedHashMap = @{}
 
-    if (Test-Path $manifestPath) {
-        $manifestData = Get-Content $manifestPath -Raw | ConvertFrom-Json
-        $manifestKeys = @($manifestData.mappings.PSObject.Properties.Name)
-        foreach ($k in $manifestKeys) {
-            $obiSourceMap[$k] = $manifestData.mappings.$k
+    if (Test-Path -LiteralPath $manifestPath) {
+        $manifestData = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $manifestProperties = @($manifestData.mappings.PSObject.Properties)
+        $manifestKeys = @($manifestProperties.Name)
+        foreach ($property in $manifestProperties) {
+            $obiSourceMap[$property.Name] = [string]$property.Value
         }
-        $obiOwnedSkills   = @($manifestKeys | Where-Object { $_ -match '^skills/([^/]+)/' } | ForEach-Object { $Matches[1] } | Select-Object -Unique)
+        if ($manifestData.PSObject.Properties.Name -contains 'deployed_hashes' -and $manifestData.deployed_hashes) {
+            foreach ($property in @($manifestData.deployed_hashes.PSObject.Properties)) {
+                $obiDeployedHashMap[$property.Name] = [string]$property.Value
+            }
+        }
+        $obiOwnedSkillFiles = @($manifestKeys | Where-Object { $_ -match '^skills/(.+)$' } | ForEach-Object { $Matches[1] })
+        $obiOwnedSkills   = @($obiOwnedSkillFiles | ForEach-Object { ($_ -split '/')[0] } | Select-Object -Unique)
         $obiOwnedCommands = @($manifestKeys | Where-Object { $_ -match '^commands/(.+)$' } | ForEach-Object { $Matches[1] })
         $obiOwnedAgents   = @($manifestKeys | Where-Object { $_ -match '^agents/(.+)$' } | ForEach-Object { $Matches[1] })
         $obiOwnedDocs     = @($manifestKeys | Where-Object { $_ -match '^docs/(.+)$' } | ForEach-Object { $Matches[1] })
         $obiOwnedHooks    = @($manifestKeys | Where-Object { $_ -match '^hooks/(.+)$' } | ForEach-Object { $Matches[1] })
-        Write-Info "Loaded manifest: $($obiOwnedSkills.Count) skill dirs, $($obiOwnedCommands.Count) commands, $($obiOwnedAgents.Count) agents, $($obiOwnedDocs.Count) docs, $($obiOwnedHooks.Count) hook files"
+        $obiOwnedOtherFiles = @($manifestKeys | Where-Object {
+            $_ -notmatch '^(commands|agents|skills|docs|hooks|tools)/'
+        })
+        Write-Info "Loaded manifest: $($obiOwnedSkills.Count) skill dirs, $($obiOwnedCommands.Count) commands, $($obiOwnedAgents.Count) agents, $($obiOwnedDocs.Count) docs, $($obiOwnedHooks.Count) hook files, $($obiOwnedOtherFiles.Count) other files"
 
         # Per-category fallback: if any category came up empty (e.g. v0.69.12
         # manifests pre-date the agents/ keys being written), fall back to
@@ -213,6 +353,7 @@ function Invoke-ClaudeCleanup {
         # the missing-keys point would silently skip cleanup for it. #147
         if ($obiOwnedSkills.Count -eq 0) {
             $obiOwnedSkills = Get-ObiSkillsFromRepo
+            $obiOwnedSkillFiles = Get-ObiSkillFilesFromRepo
             Write-Info "Manifest had 0 skills; using repo fallback: $($obiOwnedSkills.Count) skill dirs"
         }
         if ($obiOwnedCommands.Count -eq 0) {
@@ -234,6 +375,7 @@ function Invoke-ClaudeCleanup {
     } else {
         # No manifest at all: enumerate every category from repo source
         $obiOwnedSkills   = Get-ObiSkillsFromRepo
+        $obiOwnedSkillFiles = Get-ObiSkillFilesFromRepo
         $obiOwnedCommands = Get-ObiCommandsFromRepo
         $obiOwnedAgents   = Get-ObiAgentsFromRepo
         $obiOwnedDocs     = Get-ObiDocsFromRepo
@@ -241,129 +383,87 @@ function Invoke-ClaudeCleanup {
         Write-Info "No manifest found; using repo fallback: $($obiOwnedSkills.Count) skill dirs, $($obiOwnedCommands.Count) commands, $($obiOwnedAgents.Count) agents, $($obiOwnedDocs.Count) docs, $($obiOwnedHooks.Count) hook files"
     }
 
-    # Drop externally-managed skills from the cleanup list regardless of source
-    # (manifest or enumeration). Their source of truth lives outside this repo.
+    # Drop externally-managed skills from cleanup regardless of whether the
+    # ownership list came from a manifest or source enumeration.
     $obiOwnedSkills = @($obiOwnedSkills | Where-Object { $_ -notin $externallyManagedSkills })
+    $obiOwnedSkillFiles = @($obiOwnedSkillFiles | Where-Object {
+        (($_ -split '/')[0]) -notin $externallyManagedSkills
+    })
 
-    # Targeted cleanup: remove only obi-owned items from commands/
-    # Collision-aware via Remove-ObiOwnedFile (#167).
-    $commandsPath = Join-Path $ClaudeTarget 'commands'
-    if (Test-Path -LiteralPath $commandsPath) {
-        foreach ($cmd in $obiOwnedCommands) {
-            $cmdFile = Join-Path $commandsPath $cmd
-            if (-not (Test-PathUnderRoot -CandidatePath $cmdFile -Root $commandsPath)) {
-                Write-Warning "Skipping unsafe commands cleanup entry: $cmd"
+    # Build the complete cleanup plan without mutating anything. The collision
+    # gate below evaluates this whole list before the first Remove-Item, which
+    # makes a blocked deploy non-destructive.
+    $cleanupPlan = [System.Collections.Generic.List[object]]::new()
+    $categories = @(
+        @{ Items = $obiOwnedCommands;   Root = (Join-Path $ClaudeTarget 'commands'); Prefix = 'commands'; Label = 'command' },
+        @{ Items = $obiOwnedAgents;     Root = (Join-Path $ClaudeTarget 'agents');   Prefix = 'agents';   Label = 'agent' },
+        @{ Items = $obiOwnedSkillFiles; Root = (Join-Path $ClaudeTarget 'skills');   Prefix = 'skills';   Label = 'skill file' },
+        @{ Items = $obiOwnedDocs;       Root = (Join-Path $ClaudeTarget 'docs');     Prefix = 'docs';     Label = 'doc' },
+        @{ Items = $obiOwnedHooks;      Root = (Join-Path $ClaudeTarget 'hooks');    Prefix = 'hooks';    Label = 'hook' },
+        @{ Items = $obiOwnedOtherFiles; Root = $ClaudeTarget;                        Prefix = '';         Label = 'managed file' }
+    )
+
+    foreach ($category in $categories) {
+        foreach ($item in @($category.Items)) {
+            $targetFile = Join-Path $category.Root $item
+            if (-not (Test-PathUnderRoot -CandidatePath $targetFile -Root $category.Root)) {
+                Write-Warning "Skipping unsafe $($category.Prefix) cleanup entry: $item"
                 continue
             }
-            if (Test-Path -LiteralPath $cmdFile) {
-                Remove-ObiOwnedFile -TargetFile $cmdFile -DeployedRel "commands/$cmd" `
-                    -CategoryLabel 'command' -SourceRel $obiSourceMap["commands/$cmd"] `
-                    -RepoRoot $RepoRoot -DryRun:$DryRun -Force:$Force
+            if (-not (Test-Path -LiteralPath $targetFile -PathType Leaf)) { continue }
+
+            $deployedRel = if ($category.Prefix) { "$($category.Prefix)/$item" } else { $item }
+            $sourceRel = $obiSourceMap[$deployedRel]
+            if (-not $sourceRel) {
+                # Repo-enumeration fallbacks have deterministic source paths
+                # for these three mirrored trees.
+                if ($category.Prefix -eq 'skills') { $sourceRel = "skills/$item" }
+                elseif ($category.Prefix -eq 'hooks') { $sourceRel = "hooks/$item" }
+                elseif ($category.Prefix -eq 'docs') {
+                    $sourceRel = if ($item -like 'policies/*') {
+                        'policies/' + $item.Substring('policies/'.Length)
+                    } else {
+                        "docs/$item"
+                    }
+                }
             }
+
+            $resolvedSource = Resolve-ObiSourcePath -SourceRel $sourceRel -RepoRoot $RepoRoot
+            $keepTarget = ($deployedRel -eq 'settings.json') -or
+                ($resolvedSource -and (Test-Path -LiteralPath $resolvedSource -PathType Leaf))
+
+            $cleanupPlan.Add([pscustomobject]@{
+                TargetFile    = $targetFile
+                DeployedRel   = $deployedRel
+                CategoryLabel = $category.Label
+                SourceRel     = $sourceRel
+                DeployedHash  = $obiDeployedHashMap[$deployedRel]
+                KeepTarget    = $keepTarget
+            })
         }
     }
 
-    # Targeted cleanup: remove only obi-owned items from agents/
-    # Collision-aware via Remove-ObiOwnedFile (#167).
-    $agentsPath = Join-Path $ClaudeTarget 'agents'
-    if (Test-Path -LiteralPath $agentsPath) {
-        foreach ($agt in $obiOwnedAgents) {
-            $agtFile = Join-Path $agentsPath $agt
-            if (-not (Test-PathUnderRoot -CandidatePath $agtFile -Root $agentsPath)) {
-                Write-Warning "Skipping unsafe agents cleanup entry: $agt"
-                continue
-            }
-            if (Test-Path -LiteralPath $agtFile) {
-                Remove-ObiOwnedFile -TargetFile $agtFile -DeployedRel "agents/$agt" `
-                    -CategoryLabel 'agent' -SourceRel $obiSourceMap["agents/$agt"] `
-                    -RepoRoot $RepoRoot -DryRun:$DryRun -Force:$Force
-            }
-        }
+    foreach ($entry in $cleanupPlan) {
+        $collision = Get-ObiOwnedFileCollision -TargetFile $entry.TargetFile `
+            -DeployedRel $entry.DeployedRel -CategoryLabel $entry.CategoryLabel `
+            -SourceRel $entry.SourceRel -RepoRoot $RepoRoot -DeployedHash $entry.DeployedHash
+        if ($null -ne $collision) { $script:obiCollisions += $collision }
     }
 
-    # Targeted cleanup: remove only obi-owned skill directories.
-    # Skills are whole-directory atomic Obi units (no per-file collision
-    # detection — user-created skill dirs already escape Obi ownership
-    # via the manifest). But the same wildcard + path-traversal safety
-    # pattern applies (Codex Recipe 1 #2):
-    #   - Test-PathUnderRoot rejects `..` traversal and absolute paths
-    #     in malformed manifest entries.
-    #   - -LiteralPath on Test-Path / Remove-Item disables wildcards so
-    #     a corrupted key like `*` doesn't glob-match siblings.
-    $skillsPath = Join-Path $ClaudeTarget 'skills'
-    if (Test-Path -LiteralPath $skillsPath) {
-        foreach ($skill in $obiOwnedSkills) {
-            $skillDir = Join-Path $skillsPath $skill
-            if (-not (Test-PathUnderRoot -CandidatePath $skillDir -Root $skillsPath)) {
-                Write-Warning "Skipping unsafe skills cleanup entry: $skill (resolved outside $skillsPath)"
-                continue
-            }
-            if (Test-Path -LiteralPath $skillDir) {
-                if ($DryRun) { Write-Info "Would remove obi skill: $skill/" }
-                else { Remove-Item -LiteralPath $skillDir -Recurse -Force; Write-Info "Removed obi skill: $skill/" }
-            }
-        }
-    }
+    # Shared tools are deployed to $ToolsTarget/tools/. Preserve unrelated legacy files.
 
-    # Targeted cleanup: remove only obi-owned files from docs/ (#160).
-    # Previously wholesale-wiped, which clobbered any user-authored docs.
-    # Collision-aware via Remove-ObiOwnedFile (#167).
-    $docsPath = Join-Path $ClaudeTarget 'docs'
-    if (Test-Path -LiteralPath $docsPath) {
-        foreach ($doc in $obiOwnedDocs) {
-            $docFile = Join-Path $docsPath $doc
-            if (-not (Test-PathUnderRoot -CandidatePath $docFile -Root $docsPath)) {
-                Write-Warning "Skipping unsafe docs cleanup entry: $doc (resolved outside $docsPath)"
-                continue
-            }
-            if (Test-Path -LiteralPath $docFile) {
-                Remove-ObiOwnedFile -TargetFile $docFile -DeployedRel "docs/$doc" `
-                    -CategoryLabel 'doc' -SourceRel $obiSourceMap["docs/$doc"] `
-                    -RepoRoot $RepoRoot -DryRun:$DryRun -Force:$Force
-            }
-        }
-    }
-
-    # Targeted cleanup: remove only obi-owned files from hooks/ (#160).
-    # Collision-aware via Remove-ObiOwnedFile (#167).
-    $hooksTarget = Join-Path $ClaudeTarget 'hooks'
-    if (Test-Path -LiteralPath $hooksTarget) {
-        foreach ($hook in $obiOwnedHooks) {
-            $hookFile = Join-Path $hooksTarget $hook
-            if (-not (Test-PathUnderRoot -CandidatePath $hookFile -Root $hooksTarget)) {
-                Write-Warning "Skipping unsafe hooks cleanup entry: $hook (resolved outside $hooksTarget)"
-                continue
-            }
-            if (Test-Path -LiteralPath $hookFile) {
-                Remove-ObiOwnedFile -TargetFile $hookFile -DeployedRel "hooks/$hook" `
-                    -CategoryLabel 'hook' -SourceRel $obiSourceMap["hooks/$hook"] `
-                    -RepoRoot $RepoRoot -DryRun:$DryRun -Force:$Force
-            }
-        }
-    }
-
-    # tools/ is no longer deployed under $ClaudeTarget. The canonical path is
-    # $ToolsTarget\tools\, set up by the deploy block further down. The orphan
-    # tree at ~/.claude/tools/ is left in place intentionally — old plans /
-    # scripts that hardcoded the old path will fail loudly rather than silently
-    # running stale copies. Clean it manually if it bothers you.
-
-    # Collision-detection gate (#167). After the 4 collision-aware loops,
-    # check if any user-modified Obi files were detected. Default:
-    # abort with a summary so user sees what would have been clobbered.
-    # -Force: collisions were already backed up to .user-backup and
-    # removed by Remove-ObiOwnedFile; proceed to deploy phase.
+    # Collision-detection gate (#167). This runs before all cleanup mutation.
     if ($script:obiCollisions.Count -gt 0 -and -not $Force) {
         Write-Warning ''
         Write-Warning "[!] DEPLOYMENT BLOCKED: $($script:obiCollisions.Count) collision(s) detected"
         Write-Warning ''
-        Write-Warning 'The following manifest-tracked files differ from their Obi source —'
-        Write-Warning 'user-modified content. Re-running this deploy without -Force would'
-        Write-Warning 'have clobbered them.'
+        Write-Warning 'The following manifest-tracked files match neither the prior deployed'
+        Write-Warning 'bytes nor the current source. They may contain user modifications.'
         Write-Warning ''
         foreach ($c in $script:obiCollisions) {
             Write-Warning "  [$($c.Category)] $($c.Target)"
             Write-Warning "    source: $($c.Source)"
+            Write-Warning "    reason: $($c.Reason)"
         }
         Write-Warning ''
         Write-Warning 'To proceed, re-run with -Force. Modified targets will be backed up'
@@ -372,8 +472,45 @@ function Invoke-ClaudeCleanup {
         Write-Warning ''
         Write-Warning "  & '$DeployScriptPath' -Force"
         Write-Warning ''
-        exit 2
+        return $false
+    }
+
+    $collisionTargets = @{}
+    foreach ($collision in $script:obiCollisions) {
+        $collisionTargets[$collision.Target] = $true
+    }
+    foreach ($entry in $cleanupPlan) {
+        Remove-ObiOwnedFile -TargetFile $entry.TargetFile -DeployedRel $entry.DeployedRel `
+            -CategoryLabel $entry.CategoryLabel -SourceRel $entry.SourceRel `
+            -RepoRoot $RepoRoot -DeployedHash $entry.DeployedHash -DryRun:$DryRun -Force:$Force `
+            -CollisionChecked -CollisionDetected:($collisionTargets.ContainsKey($entry.TargetFile)) `
+            -KeepTarget:$entry.KeepTarget
+    }
+
+    # Skill cleanup is file-granular so user-created files inside an Obi skill
+    # survive. Prune only directories that became empty after managed files
+    # were removed; .user-backup files intentionally keep their directory.
+    if (-not $DryRun) {
+        $skillsPath = Join-Path $ClaudeTarget 'skills'
+        foreach ($skill in $obiOwnedSkills) {
+            $skillDir = Join-Path $skillsPath $skill
+            if (-not (Test-PathUnderRoot -CandidatePath $skillDir -Root $skillsPath)) { continue }
+            if (-not (Test-Path -LiteralPath $skillDir -PathType Container)) { continue }
+
+            $nestedDirs = @(Get-ChildItem -LiteralPath $skillDir -Directory -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object { $_.FullName.Length } -Descending)
+            foreach ($nestedDir in $nestedDirs) {
+                if (@(Get-ChildItem -LiteralPath $nestedDir.FullName -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                    Remove-Item -LiteralPath $nestedDir.FullName -Force
+                }
+            }
+            if (@(Get-ChildItem -LiteralPath $skillDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+                Remove-Item -LiteralPath $skillDir -Force
+                Write-Info "Removed empty obi skill: $skill/"
+            }
+        }
     }
 
     Write-Check 'Cleanup complete'
+    return $true
 }

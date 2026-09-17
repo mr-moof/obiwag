@@ -34,7 +34,14 @@ class DriftNagStop:
     def run(self, ctx: 'DetectorContext') -> Optional[str]:
         from core.drift_nag import compute_drift_delta, format_drift_nag
 
-        delta, _ = compute_drift_delta()
+        deadline = None
+        if ctx.deadline_monotonic is not None:
+            deadline = max(0.0, ctx.deadline_monotonic - 0.25)
+        delta, _ = (
+            compute_drift_delta(deadline_monotonic=deadline)
+            if deadline is not None
+            else compute_drift_delta()
+        )
         if delta is not None and delta > 0:
             return "\n" + format_drift_nag(delta)
         return None

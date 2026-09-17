@@ -43,11 +43,11 @@ $cwd = $data.cwd
 $dir = if ($cwd) { Split-Path -Leaf $cwd } else { "?" }
 
 # Read Obi version (cached at script start)
-# OBI_HOME = CB-trusted deploy root (C:\src\obi-tools by default).
+# OBI_HOME = user-local deploy root (C:\src\obi-tools by default).
 # Fall back to the literal so statusline doesn't break the prompt on a fresh
 # session before the User-scope env var is inherited.
 $obiVersion = ""
-$obiHome = if ($env:OBI_HOME) { $env:OBI_HOME } else { 'C:\src\obi-tools' }
+$obiHome = if ($env:OBI_HOME) { $env:OBI_HOME } else { Join-Path $env:USERPROFILE '.obi-tools' }
 $versionYaml = Join-Path $obiHome 'tools\version.yaml'
 if (Test-Path $versionYaml) {
     $vContent = Get-Content $versionYaml -Raw

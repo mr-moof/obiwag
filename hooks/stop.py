@@ -6,7 +6,7 @@ This hook runs when Claude Code session ends to:
 2. Analyze corrections for learning opportunities
 3. Propose calibration evolutions if warranted
 4. Detect learnings and prompt for approval (autonomous learning)
-5. Sync approved learnings to the remote and auto-deploy
+5. Sync approved learnings to GitHub and auto-deploy
 
 Pipeline steps live in ``core/stop_pipeline.py`` so each can be tested in
 isolation.  ``main()`` here is thin orchestration.
@@ -40,6 +40,11 @@ from core.session_summarizer import (  # noqa: E402,F401
     generate_summary_text,
     should_propose_evolution,
 )
+
+
+# Claude's configured Stop ceiling is 10 seconds.  Keep a four-second margin
+# for interpreter startup, imports, output serialization, and scheduler jitter.
+STOP_SOFT_BUDGET_SECONDS = 6.0
 
 
 def get_pending_learnings_path() -> str:
@@ -120,25 +125,56 @@ def detect_and_prompt_learnings(
 
 def main():
     """Main entry point for Stop hook — thin orchestration over stop_pipeline."""
+    hook_started_monotonic = time.monotonic()
+    hook_deadline_monotonic = hook_started_monotonic + STOP_SOFT_BUDGET_SECONDS
     from core.worker_guard import exit_if_worker
     exit_if_worker()  # OPT-23: no-op inside a headless worker subprocess
     from core.hook_logger import HookTimer
-    from core import stop_advisories
     from core import stop_pipeline as sp
 
     with HookTimer("Stop") as timer:
         try:
-            start_time = time.time()
+            from core.hook_runtime import read_hook_input
 
-            input_data: Dict[str, Any] = {}
-            try:
-                input_data = json.load(sys.stdin)
-            except (json.JSONDecodeError, ValueError):
-                pass
+            input_data: Dict[str, Any] = read_hook_input(sys.stdin)
 
             timer.set_input_summary(
                 f"has_transcript={bool(input_data.get('transcript') or input_data.get('transcript_path'))}"
             )
+
+            # issue #200 §3: unresolved tool-result-drop gate. Runs BEFORE the
+            # summary-enabled gate below — it is a safety mechanism, not logging.
+            # Fully guarded: a drop_guard fault can never prevent a normal stop, and
+            # the retry counter inside bounds blocking to _RETRY_CAP then fails loud.
+            with HookTimer("Stop/transcript_load"):
+                transcript_text = sp.load_transcript(input_data)
+
+            with HookTimer("Stop/drop_guard"):
+                try:
+                    from core import drop_guard
+                    drop_out = drop_guard.evaluate_stop_block(
+                        input_data=input_data,
+                        transcript_text=transcript_text,
+                        session_id=input_data.get('session_id'),
+                        cwd=os.getcwd(),
+                    )
+                except Exception as exc:
+                    from core.hook_logger import log_swallowed
+                    log_swallowed('stop_drop_guard', exc)
+                    drop_out = {
+                        "systemMessage": (
+                            "Tool-result recovery guard failed.\n"
+                            "Stop was allowed to avoid an unbounded retry loop.\n"
+                            "Verify the last tool result; diagnostics were logged."
+                        )
+                    }
+            if drop_out is not None:
+                timer.set_output_summary(
+                    "drop-guard: "
+                    + ("block" if drop_out.get("decision") == "block" else "fail-loud")
+                )
+                print(json.dumps(drop_out), file=sys.stdout)
+                sys.exit(0)
 
             from core.calibration import is_safety_enabled
             from core.memory_reader import generate_session_id
@@ -149,37 +185,55 @@ def main():
                 print(json.dumps({}), file=sys.stdout)
                 sys.exit(0)
 
-            transcript_text = sp.load_transcript(input_data)
+            with HookTimer("Stop/transcript_analysis"):
+                metrics = analyze_transcript(transcript_text)
 
-            metrics = analyze_transcript(transcript_text)
+            # Resolve THIS session (not the most recently modified file, which
+            # could belong to a concurrent session) and snapshot everything we
+            # need BEFORE deleting it. Reading after cleanup() reloaded defaults,
+            # so a persisted task_type could never survive to the summary —
+            # the second root cause of `task_type: unknown` (issue #202).
+            from core.session_state import StateUnavailable, resolve_session_id
+            session_state = get_session_state(resolve_session_id(input_data))
+            try:
+                snapshot = session_state.get_all() if session_state else None
+            except StateUnavailable:
+                # Busy lock: degrade to the transcript-derived values rather than
+                # substituting defaults, and leave the file intact below.
+                snapshot = None
 
-            session_state = get_session_state()
-            tools_used = sp.extract_tools_used(metrics, session_state)
-            if session_state:
+            tools_used = sp.extract_tools_used(metrics, snapshot)
+            task_type = sp.resolve_task_type(input_data, snapshot)
+
+            # Only now is the state expendable -- and only if we actually read it.
+            # Deleting after a FAILED snapshot would discard state we never
+            # consumed: the lock could free up between the read attempt and the
+            # delete, so the delete would succeed where the read did not. Leave it
+            # for cleanup_old_sessions() instead.
+            if session_state and snapshot is not None:
                 session_state.cleanup()
             cleanup_old_sessions(max_age_hours=24)
             clear_current_session()  # session ending — drop the SessionStart sentinel (OPT-04 #177)
-
-            task_type = sp.resolve_task_type(input_data, session_state)
             outcome = sp.derive_outcome(metrics)
             session_id = generate_session_id()
             summary_text = generate_summary_text(task_type, outcome, metrics)
             detailed_corrections = sp.build_detailed_corrections(metrics)
 
-            sp.write_session_outputs(
-                session_id=session_id,
-                task_type=task_type,
-                outcome=outcome,
-                metrics=metrics,
-                summary_text=summary_text,
-                detailed_corrections=detailed_corrections,
-            )
-            sp.run_quality_signal_write(session_id, task_type, tools_used, detailed_corrections)
-            sp.update_calibration_metrics(metrics, detailed_corrections, outcome)
+            with HookTimer("Stop/session_outputs"):
+                sp.write_session_outputs(
+                    session_id=session_id,
+                    task_type=task_type,
+                    outcome=outcome,
+                    metrics=metrics,
+                    summary_text=summary_text,
+                    detailed_corrections=detailed_corrections,
+                )
+                sp.run_quality_signal_write(session_id, task_type, tools_used, detailed_corrections)
+                sp.update_calibration_metrics(metrics, detailed_corrections, outcome)
 
-            # M4: time budget for non-critical steps. 7s leaves a 3s safety margin
-            # before Claude Code's 10s hook timeout.
-            time_budget_ok = (time.time() - start_time) < 7
+            # Non-critical work must fit an absolute budget.  Admission alone is
+            # insufficient unless each slow detector also receives the deadline.
+            time_budget_ok = time.monotonic() < (hook_deadline_monotonic - 0.5)
 
             sp.run_evolution_proposal_if_due(time_budget_ok, task_type, metrics)
 
@@ -200,7 +254,8 @@ def main():
             det_ctx = DetectorContext(
                 hook_point='stop',
                 cwd=os.getcwd(),
-                start_time=start_time,
+                start_time=time.time(),
+                deadline_monotonic=hook_deadline_monotonic,
                 calibration=load_calibration(),
                 transcript_text=transcript_text,
                 metrics=metrics,
@@ -209,11 +264,6 @@ def main():
             system_message = sp.append_message(
                 system_message,
                 run_stop_detectors(det_ctx),
-            )
-
-            system_message = sp.append_message(
-                system_message,
-                stop_advisories.run_shutdown_advisories(time_budget_ok, transcript_text),
             )
 
             timer.set_output_summary(

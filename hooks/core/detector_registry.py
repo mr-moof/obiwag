@@ -64,6 +64,9 @@ class DetectorContext:
     hook_point: str                              # 'stop' or 'session_start'
     cwd: str                                     # os.getcwd()
     start_time: float                            # for time-budget checks
+    # Absolute monotonic soft deadline supplied by production hooks.  Tests and
+    # older callers may omit it and retain the legacy wall-clock budget path.
+    deadline_monotonic: Optional[float] = None
     calibration: Dict[str, Any] = field(default_factory=dict)
     transcript_text: str = ''
     metrics: Dict[str, Any] = field(default_factory=dict)
@@ -72,6 +75,12 @@ class DetectorContext:
     task_type: str = ''
     task_text: str = ''
     maintenance_due: bool = False              # True when daily maintenance is due
+
+    def remaining_seconds(self, fallback_budget_seconds: float = 7.0) -> float:
+        """Return usable hook time without mixing wall and monotonic clocks."""
+        if self.deadline_monotonic is not None:
+            return max(0.0, self.deadline_monotonic - time.monotonic())
+        return max(0.0, fallback_budget_seconds - (time.time() - self.start_time))
 
 
 # ---------------------------------------------------------------------------
@@ -82,14 +91,15 @@ def _build_stop_detectors() -> List[Detector]:
     """Build the stop-detector list. Deferred to avoid import-time side effects.
 
     Order mirrors the original stop-hook output sequence:
-      1. learning              — autonomous learning via LearningDetector
-      2. strike_counter         — was hand-wired in stop.py before the registry call
-      3. dirty_session          — increment 1
-      4. project_memory_backup  — was in stop_advisories, after dirty_session
-      5. obi_state_backup       — was in stop_advisories, after project_memory
-      6. capability_claim       — was last in stop_advisories
-      7. drift_detector_stop    — was _drift_message in stop_advisories
-      8. drift_nag_stop         — was _drift_nag_message in stop_advisories
+      1. peer_review_ownership — never let an accepted broker run disappear
+      2. learning              — autonomous learning via LearningDetector
+      3. strike_counter        — was hand-wired in stop.py before the registry call
+      4. dirty_session         — increment 1
+      5. project_memory_backup — was in stop_advisories, after dirty_session
+      6. obi_state_backup      — was in stop_advisories, after project_memory
+      7. capability_claim      — was last in stop_advisories
+      8. drift_detector_stop   — was _drift_message in stop_advisories
+      9. drift_nag_stop        — was _drift_nag_message in stop_advisories
     """
     from core.detectors.capability_claim_detector import CapabilityClaimDetector
     from core.detectors.dirty_session_detector import DirtySessionDetector
@@ -97,10 +107,12 @@ def _build_stop_detectors() -> List[Detector]:
     from core.detectors.drift_nag_stop import DriftNagStop
     from core.detectors.learning_detector_stop import LearningDetector
     from core.detectors.obi_state_backup_detector import ObiStateBackupDetector
+    from core.detectors.peer_review_ownership_detector import PeerReviewOwnershipDetector
     from core.detectors.project_memory_backup_detector import ProjectMemoryBackupDetector
     from core.detectors.strike_counter_detector import StrikeCounterDetector
 
     return [
+        PeerReviewOwnershipDetector(),
         LearningDetector(),
         StrikeCounterDetector(),
         DirtySessionDetector(),
@@ -115,16 +127,11 @@ def _build_stop_detectors() -> List[Detector]:
 def _build_session_start_detectors() -> List[Detector]:
     """Build the session-start detector list.
 
-    Order mirrors the original session_start._handle output sequence:
-      1. correction_retriever     — was inline in session_start._handle
-      2. drift_detector_session   — was inline in maintenance block
-         (includes drift-nag baseline save to avoid double detect_drift I/O)
+    Session-start detectors do not infer a task from absent prompt text.
     """
-    from core.detectors.correction_retriever_detector import CorrectionRetrieverDetector
     from core.detectors.drift_detector_session_start import DriftDetectorSessionStart
 
     return [
-        CorrectionRetrieverDetector(),
         DriftDetectorSessionStart(),
     ]
 
@@ -157,13 +164,35 @@ def run_detectors(
 
     message: Optional[str] = None
 
+    # A pre-call threshold matters as much as the aggregate deadline.  The old
+    # gate allowed a 4-5 second drift scan to begin at 6.9s and overrun Claude's
+    # 10 second Stop ceiling.  Values are conservative admission budgets, not
+    # promises that callers may raise the outer hook timeout around.
+    minimum_remaining = {
+        'learning': 1.0,
+        'strike_counter': 0.15,
+        'peer_review_ownership': 0.5,
+        'dirty_session': 4.5,
+        'project_memory_backup': 3.0,
+        'obi_state_backup': 0.5,
+        'capability_claim': 0.5,
+        'drift_detector_stop': 5.0,
+        'drift_nag_stop': 5.0,
+        'drift_detector_session': 1.5,
+    }
+
     for detector in detectors:
         # 1. Enablement gate
         if not detector.is_enabled(ctx.calibration):
             continue
 
         # 2. Time-budget gate
-        if (time.time() - ctx.start_time) >= time_budget_seconds:
+        required = float(getattr(
+            detector,
+            'minimum_remaining_seconds',
+            minimum_remaining.get(detector.name, 0.25),
+        ))
+        if ctx.remaining_seconds(time_budget_seconds) < required:
             message = append_message(
                 message,
                 f"\n[Skipped: {detector.name}] Stop hook over time budget.",
@@ -171,7 +200,8 @@ def run_detectors(
             continue
 
         # 3 + 4. Timed execution with exception swallowing
-        hook_label = f"{ctx.hook_point.title()}/{detector.name}"
+        hook_prefix = 'SessionStart' if ctx.hook_point == 'session_start' else 'Stop'
+        hook_label = f"{hook_prefix}/{detector.name}"
         try:
             with HookTimer(hook_label):
                 result = detector.run(ctx)

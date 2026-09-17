@@ -30,8 +30,8 @@ VENDOR_INDICATORS = [
     # Virtualization / hypervisors
     (r'(hypervisor|virtual\s*machine|vm\s*host|kvm\b|qemu\b|libvirt|openstack|nova\b)',
      'virtualization', 'docs/domain-patterns/virtualization.md'),
-    # Service management / ticketing / CMDB
-    (r'(itsm\b|ticketing\s*system|cmdb\s*(table|record|ci)|incident\s*table)',
+    # Generic ticketing services
+    (r'(ticketing\s*system|support\s*request)',
      'service-management', 'docs/domain-patterns/service-management.md'),
     # Authentication / Authorization protocols
     (r'(oidc|oauth2?|saml|ldap\b|kerberos|jwt\b|bearer\s*token|claims?\s*based|openid)',
@@ -155,7 +155,7 @@ REFERENCE_IMPL_CATEGORIES = [
      'mcp-integration', 'docs/domain-patterns/mcp.md'),
     (r'(api\s+client|rest\s+client|http\s+client)\s+(wrapper|pattern|implementation)',
      'api-client', 'docs/domain-patterns/api-clients.md'),
-    (r'(github\s+pages|static\s+site)\s+(deploy|hosting|ci)',
+    (r'(github\s+pages|static\s+site)\s+(deploy|publish|ci)',
      'static-site', 'docs/domain-patterns/static-site.md'),
     (r'(docker|container)\s+(compose|build|deploy|image)',
      'containerization', 'docs/domain-patterns/docker.md'),
